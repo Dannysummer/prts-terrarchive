@@ -1,0 +1,8 @@
+# 本地资料包（约 322MB，首次使用由 installer.js 自动从 ModelScope/站点下载）
+/data/releases/
+# 本地生成的 cursor HMAC 密钥；不同安装必须各自持有，禁止进入源码仓库
+/data/cursor-secret.bin
+# 本地开发产物：便携 Node 22 与 DSH profile 目录
+/.node22/
+/.node22-v*-backup/
+/.dsh-home/

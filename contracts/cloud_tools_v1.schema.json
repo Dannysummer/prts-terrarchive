@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prts.chat/contracts/agent-cloud-tools-v1.schema.json",
+  "title": "PRTS Agent cloud retrieval tools",
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "stringList": {
+      "type": "array",
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "sourceType": {
+      "type": "string",
+      "enum": [
+        "entity_profile",
+        "entity_attachment",
+        "graph_entity",
+        "graph_relation",
+        "graph_event",
+        "csv_archive",
+        "csv_activity",
+        "csv_record",
+        "vector_original",
+        "vector_scene",
+        "vector_wiki",
+        "entity_attribute",
+        "travel_notes",
+        "classic_hit",
+        "timeline"
+      ]
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "official_name", "label"],
+      "properties": {
+        "text": { "$ref": "#/$defs/nonEmptyString" },
+        "official_name": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "is_group": { "type": "boolean" },
+        "members": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/entity" }
+        }
+      }
+    },
+    "retrievalFilters": {
+      "description": "云端候选过滤条件。同一数组内取 OR，不同字段之间取 AND；只在后续精修轮使用已经确认的实体或来源范围。",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entity_names": { "$ref": "#/$defs/stringList", "description": "规范实体名。" },
+        "entity_labels": { "$ref": "#/$defs/stringList", "description": "实体类型标签。" },
+        "activities": { "$ref": "#/$defs/stringList", "description": "活动展示名。" },
+        "story_ids": { "$ref": "#/$defs/stringList", "description": "稳定剧情 ID。" },
+        "story_codes": { "$ref": "#/$defs/stringList", "description": "关卡或篇目代码。" },
+        "source_files": { "$ref": "#/$defs/stringList", "description": "云端来源文件标记。" },
+        "doc_ids": { "$ref": "#/$defs/stringList", "description": "云端资料记录 ID。" },
+        "source_types": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sourceType" }
+        },
+        "speakers": { "$ref": "#/$defs/stringList", "description": "结构化说话人；只匹配具有说话人字段的候选。" }
+      }
+    },
+    "retrievalLimits": {
+      "description": "后续精修轮的候选、最终来源和回答上下文预算；首轮省略以使用服务端默认值。",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "per_channel": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 1, "maximum": 1000 }
+        },
+        "candidate_limit": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "final_limit": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "context_chars": { "type": "integer", "minimum": 500, "maximum": 1000000 }
+      }
+    },
+    "retrievalThresholds": {
+      "description": "后续精修轮的最低检索分数；分数仅用于筛选，不代表事实正确。",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "per_channel": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        },
+        "minimum_score": { "type": "number" }
+      }
+    },
+    "retrievalOptions": {
+      "description": "高级检索控制。新意图的默认首轮必须省略；读取首轮结果并确认具体缺口后才选择性设置。",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channels": {
+          "description": "仅执行这些主检索渠道；不是首轮必填项。",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "exclude_channels": {
+          "description": "排除这些检索渠道。",
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "query_variants": {
+          "description": "在原问题之外追加的等义或定向查询；必须保留原问题含义。",
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 20000 }
+        },
+        "entity_overrides": {
+          "description": "使用已经确认的规范实体覆盖本轮自动实体链接。",
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/entity" }
+        },
+        "filters": { "$ref": "#/$defs/retrievalFilters" },
+        "limits": { "$ref": "#/$defs/retrievalLimits" },
+        "thresholds": { "$ref": "#/$defs/retrievalThresholds" },
+        "validation": {
+          "description": "候选 LLM 审核方式：default 沿用产品默认，none 跳过，record_only 记录但不删除，llm 显式启用。",
+          "type": "string",
+          "enum": ["default", "none", "record_only", "llm"]
+        },
+        "search_intent": {
+          "description": "single_sentence_search 在用户只记得一句原文的大意、措辞可能不准时，专门对官方剧情单句向量表做模糊检索；quote_search 跨资料查结构化说话人台词、名词或近似引文；scene_search 查事件和场景。",
+          "type": "string",
+          "enum": ["quote_search", "scene_search", "single_sentence_search"]
+        },
+        "preprocess": { "type": "boolean", "description": "是否执行查询预处理。" },
+        "link_entities": { "type": "boolean", "description": "是否自动链接规范实体。" },
+        "attach_entity_profiles": { "type": "boolean", "description": "是否附加命中实体的资料卡。" },
+        "run_cleaner": { "type": "boolean", "description": "是否执行候选清洗与审核。" },
+        "append_fallback_original": { "type": "boolean", "description": "是否附加兜底原文检索。" },
+        "append_wiki": { "type": "boolean", "description": "是否附加自建 Wiki 检索。" },
+        "append_timeline": { "type": "boolean", "description": "是否附加时间线检索。" },
+        "include_raw_candidates": { "type": "boolean", "description": "响应投影偏好；首轮模型视图不含原始候选，完整候选仍可由 cloud_inspect 查看。" },
+        "include_rejected": { "type": "boolean", "description": "响应投影偏好；淘汰决定保留在可审计的服务端检索状态中。" },
+        "include_selected_sources": { "type": "boolean", "description": "响应投影偏好；浏览器用最终来源生成本地锚点，模型仅接收无正文 source_index。" },
+        "include_answer_context": { "type": "boolean", "description": "是否返回与主站相同的 Cleaner 有界回答材料；Agent 首轮固定启用。" },
+        "include_events": { "type": "boolean", "description": "响应投影偏好；事件默认只通过 cloud_inspect 查看。" },
+        "include_trace": { "type": "boolean", "description": "响应投影偏好；trace 默认只通过 cloud_inspect 查看。" },
+        "timeout_ms": { "type": "integer", "minimum": 100, "maximum": 300000, "description": "本轮云端检索总超时毫秒数。" }
+      }
+    },
+    "cloudSearchRequest": {
+      "description": "执行一轮云端组合检索。新意图首轮通常只提交 intent_id 和完整自然语言 query；用户只记得一句原文的大意且需要模糊定位时，可在首轮设置 options.search_intent=single_sentence_search。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["intent_id", "query"],
+      "properties": {
+        "intent_id": { "$ref": "#/$defs/identifier", "description": "同一用户检索意图跨轮复用的稳定 ID。" },
+        "request_id": { "$ref": "#/$defs/identifier", "description": "本次实际云端调用 ID；省略时由运行时生成。" },
+        "round_id": { "$ref": "#/$defs/identifier", "description": "同一意图内的云端检索轮次；省略时由运行时生成。" },
+        "query": { "type": "string", "minLength": 1, "maxLength": 20000,
+          "description": "首轮提交完整自然语言问题；可以保留原问题或在不改变含义与问题结构的前提下润色，不能退化为分词后的关键词堆砌。" },
+        "depth": { "type": "string", "enum": ["fast", "standard", "deep"], "description": "云端检索深度；首轮省略以使用产品默认。" },
+        "evidence_policy": { "type": "string", "enum": ["mixed", "original_only"], "description": "mixed 允许多资料来源，original_only 将最终来源限制为原文类；首轮通常省略。" },
+        "options": { "$ref": "#/$defs/retrievalOptions", "description": "高级检索控制；新意图首轮通常省略。明确需要模糊检索单句原文时，首轮可只设置 search_intent=single_sentence_search；其他参数在确认召回缺口后再选择性设置。" }
+      }
+    },
+    "cloudInspectRequest": {
+      "description": "过滤或重读指定 request_id 的云端检索状态；首轮 cloud_search 已交付主站同款回答工作集，诊断和来源全文按需读取。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id"],
+      "properties": {
+        "request_id": { "$ref": "#/$defs/identifier", "description": "cloud_search 返回的 request_id。" },
+        "section": {
+          "description": "summary 为概览，candidates 为原始候选与决定，selected_sources 为最终来源，answer_context 为组合回答材料，events/trace_steps 仅用于诊断。",
+          "type": "string",
+          "enum": ["summary", "candidates", "selected_sources", "events", "trace_steps", "answer_context"]
+        },
+        "cursor": { "type": "integer", "minimum": 0, "description": "数值分页起点；首次省略，后续使用响应的 next_cursor。" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "本页最多返回的条目数；服务端默认 50。" },
+        "channels": { "$ref": "#/$defs/stringList" },
+        "query_variants": { "$ref": "#/$defs/stringList" },
+        "retrievers": { "$ref": "#/$defs/stringList" },
+        "source_types": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sourceType" }
+        },
+        "statuses": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["retrieved", "kept", "filtered", "discarded", "error"]
+          }
+        },
+        "stages": { "$ref": "#/$defs/stringList" },
+        "candidate_ids": { "$ref": "#/$defs/stringList" },
+        "evidence_ids": { "$ref": "#/$defs/stringList" },
+        "event_sequence_from": { "type": "integer", "minimum": 1 },
+        "event_sequence_to": { "type": "integer", "minimum": 1 },
+        "event_time_from": { "type": "string", "format": "date-time" },
+        "event_time_to": { "type": "string", "format": "date-time" },
+        "content_mode": { "type": "string", "enum": ["none", "preview", "full"], "description": "none 隐去正文字段，preview 返回受限正文，full 返回本页完整正文；默认 preview。" },
+        "content_max_chars": { "type": "integer", "minimum": 100, "maximum": 100000, "description": "preview 模式下每个正文字段的最大字符数；默认 1200。" }
+      }
+    }
+  }
+}

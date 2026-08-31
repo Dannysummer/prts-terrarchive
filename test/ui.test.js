@@ -1,0 +1,507 @@
+/**
+ * 设置界面测试：state.js 配置分层、ui.js API 路由、lib/client.js 浏览器半边冒烟。
+ */
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { gzipSync } from 'node:zlib'
+import vm from 'node:vm'
+import { createSharedState, redactConfig } from '../src/state.js'
+import { buildApi, applyUi } from '../src/ui.js'
+import { CorpusStore, computeLinesIntegrity } from '../src/store.js'
+
+const sha256 = (buffer) => createHash('sha256').update(buffer).digest('hex')
+
+test('state：三层配置（默认 ← patch ← 用户文件）与写校验', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prts-state-'))
+  try {
+    const configPath = join(dir, 'config.json')
+    const shared = createSharedState({
+      configPath,
+      releasesDir: dir,
+      patchConfig: { uiSkin: 'prts-agent', cloud: { baseUrl: 'https://patch.example' }, budget: { hardIntentRecords: 5 } },
+    })
+    // 默认 + base 层
+    let effective = shared.effective()
+    assert.equal(effective.cloudEnabled, true, 'patch cloud.baseUrl → cloudEnabled')
+    assert.equal(effective.cloudBaseUrl, 'https://patch.example')
+    assert.equal(effective.uiSkin, 'prts-agent')
+    assert.equal(effective.hardIntentRecords, undefined, '旧 patch 预算配置已忽略')
+
+    // 写用户层：合法补丁持久化并覆盖 base
+    effective = await shared.saveConfig({ cloudEnabled: false })
+    assert.equal(effective.cloudEnabled, false)
+    assert.equal(effective.cloudBaseUrl, 'https://patch.example', '未写的键沿用 base')
+    const persisted = JSON.parse(await readFile(configPath, 'utf8'))
+    assert.deepEqual(persisted, { cloudEnabled: false })
+
+    effective = await shared.saveConfig({ uiSkin: 'prts-agent' })
+    assert.equal(effective.uiSkin, 'prts-agent')
+    effective = await shared.saveConfig({ uiSkin: 'endfield-aic' })
+    assert.equal(effective.uiSkin, 'endfield-aic')
+
+    // 新实例从文件恢复用户层
+    const reloaded = createSharedState({ configPath, releasesDir: dir, patchConfig: {} })
+    await reloaded.loadConfig()
+    assert.equal(reloaded.effective().cloudEnabled, false)
+    assert.equal(reloaded.effective().uiSkin, 'endfield-aic')
+
+    // 非法补丁拒绝且不落盘
+    const before = await readFile(configPath, 'utf8')
+    await assert.rejects(() => shared.saveConfig({ nonsense: 1 }), (e) => e.code === 'INVALID_CONFIG')
+    await assert.rejects(() => shared.saveConfig({ cloudBaseUrl: 'ftp://x' }), (e) => e.code === 'INVALID_CONFIG')
+    await assert.rejects(() => shared.saveConfig({ uiSkin: 'unknown' }), (e) => e.code === 'INVALID_CONFIG')
+    // 明文 http 仅允许环回主机（本地开发）；局域网/公网明文地址拒绝。
+    await assert.rejects(() => shared.saveConfig({ cloudBaseUrl: 'http://192.168.1.5:5565' }), (e) => e.code === 'INVALID_CONFIG')
+    effective = await shared.saveConfig({ cloudBaseUrl: 'http://127.0.0.1:5565' })
+    assert.equal(effective.cloudBaseUrl, 'http://127.0.0.1:5565')
+    // 旧版用户文件中的预算键安静废弃，不会让升级后的插件启动失败。
+    await writeFile(configPath, JSON.stringify({ cloudEnabled: false, uiSkin: 'prts-agent', hardIntentRecords: 9,
+      approvalMode: 'on', autoDownload: true }))
+    await shared.loadConfig()
+    assert.equal(shared.effective().hardIntentRecords, undefined)
+    assert.equal(shared.effective().approvalMode, undefined)
+    assert.equal(shared.effective().autoDownload, undefined)
+    await shared.saveConfig({})
+    assert.equal(await readFile(configPath, 'utf8'), '{\n  "cloudEnabled": false,\n  "uiSkin": "prts-agent"\n}\n')
+
+    // 脱敏
+    const red = redactConfig({ ...effective, cloudToken: '' }, {})
+    assert.equal(red.cloudToken, undefined)
+    assert.equal(red.hasCloudToken, false)
+    assert.equal(redactConfig({ cloudToken: 'x' }).hasCloudToken, true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+/** 造一个最小本地 release（含合法分片，供 activate/reset 链路验证）。 */
+async function makeRelease(releasesDir, releaseId, dataVersion, lineText) {
+  const lines = [{ line_number: 1, line_type: 'narration', speaker_raw: '', text: lineText ?? `正文-${releaseId}` }]
+  const record = {
+    document: { document_id: `client:references:${releaseId}`, source_ref_prefix: `client_data:references:${'0'.repeat(24)}`,
+      display_title: `文档-${releaseId}`, document_type: 'reference', document_kind: 'reference', line_count: 1 },
+    lines, speakers: [], local_integrity: { algorithm: 'sha256:joined-lines-v1', sha256: computeLinesIntegrity(lines) },
+  }
+  const shard = gzipSync(Buffer.from(`${JSON.stringify(record)}\n`))
+  const dir = join(releasesDir, releaseId, 'references')
+  await mkdir(join(dir, 'shards'), { recursive: true })
+  await writeFile(join(dir, 'pack-manifest.json'), JSON.stringify({
+    pack_id: 'references', data_version: dataVersion,
+    shards: [{ path: 'shards/00000.jsonl.gz', sha256: sha256(shard), compressed_size: shard.length }],
+    search_index: { shards: [] },
+  }))
+  await writeFile(join(dir, 'shards', '00000.jsonl.gz'), shard)
+  await writeFile(join(releasesDir, releaseId, 'release-manifest.json'), JSON.stringify({
+    release_id: releaseId, data_version: dataVersion, document_count: 1, created_at: `2026-01-0${releaseId.length}T00:00:00Z`,
+  }))
+}
+
+test('ui API：releases / activate / delete / config / status', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prts-ui-'))
+  try {
+    const releasesDir = join(dir, 'releases')
+    await mkdir(releasesDir, { recursive: true })
+    await makeRelease(releasesDir, 'rel-a', 'a'.repeat(64))
+    await makeRelease(releasesDir, 'rel-b', 'b'.repeat(64))
+    await writeFile(join(releasesDir, 'current.json'), JSON.stringify({ release_id: 'rel-a', data_version: 'a'.repeat(64) }))
+    const shared = createSharedState({ configPath: join(dir, 'config.json'), releasesDir, patchConfig: {} })
+    await shared.loadConfig()
+    const api = buildApi(shared, { logger: { info: () => {}, warn: () => {} } })
+
+    // releases 清单
+    const list = await api.call('GET', '/api/prts-corpus/releases')
+    assert.equal(list.status, 200)
+    assert.equal(list.json.releases.length, 2)
+    const active = list.json.releases.find((item) => item.releaseId === 'rel-a')
+    assert.equal(active.active, true)
+    assert.ok(active.sizeBytes > 0)
+    assert.equal(active.documentCount, 1)
+
+    // 挂上真 store 验证 status 与激活热切换
+    const store = new CorpusStore({ releasesDir })
+    shared.store = store
+    await store.ready()
+    const status = await api.call('GET', '/api/prts-corpus/status')
+    assert.equal(status.status, 200)
+    assert.equal(status.json.store.releaseId, 'rel-a')
+    assert.equal(status.json.store.documentCount, 1)
+    assert.equal(status.json.config.hasCloudToken, false)
+
+    // 激活 rel-b → store 热重载到新版本
+    const activated = await api.call('POST', '/api/prts-corpus/activate', { releaseId: 'rel-b' })
+    assert.equal(activated.status, 200)
+    await store.ready()
+    assert.equal(store.releaseId, 'rel-b')
+    assert.equal(store.dataVersion, 'b'.repeat(64))
+
+    // 删除保护：当前版本拒绝；非当前可删
+    const deny = await api.call('POST', '/api/prts-corpus/delete', { releaseId: 'rel-b' })
+    assert.equal(deny.status, 409)
+    const removed = await api.call('POST', '/api/prts-corpus/delete', { releaseId: 'rel-a' })
+    assert.equal(removed.status, 200)
+    await assert.rejects(() => stat(join(releasesDir, 'rel-a')), /ENOENT/)
+
+    // 配置写
+    const saved = await api.call('PUT', '/api/prts-corpus/config', { patch: { cloudEnabled: true, cloudBaseUrl: 'https://x.example' } })
+    assert.equal(saved.status, 200)
+    assert.equal(shared.effective().cloudEnabled, true)
+    const badConfig = await api.call('PUT', '/api/prts-corpus/config', { patch: { cloudBaseUrl: 123 } })
+    assert.equal(badConfig.status, 400)
+
+    // 未知路由
+    assert.equal((await api.call('GET', '/api/prts-corpus/none')).status, 404)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('CorpusStore：reset 期间旧初始化不会覆盖新版本', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prts-store-race-'))
+  try {
+    const releasesDir = join(dir, 'releases')
+    await mkdir(releasesDir, { recursive: true })
+    await makeRelease(releasesDir, 'rel-a', 'a'.repeat(64))
+    await makeRelease(releasesDir, 'rel-b', 'b'.repeat(64))
+    await writeFile(join(releasesDir, 'current.json'), JSON.stringify({ release_id: 'rel-a' }))
+
+    const store = new CorpusStore({ releasesDir })
+    const originalRead = store._readPacked.bind(store)
+    let enteredResolve
+    let continueResolve
+    const entered = new Promise((resolve) => { enteredResolve = resolve })
+    const continueOld = new Promise((resolve) => { continueResolve = resolve })
+    store._readPacked = async (packId, shardPath, releaseId) => {
+      if (releaseId === 'rel-a') {
+        enteredResolve()
+        await continueOld
+      }
+      return originalRead(packId, shardPath, releaseId)
+    }
+
+    const oldReady = store.ready()
+    await entered
+    await writeFile(join(releasesDir, 'current.json'), JSON.stringify({ release_id: 'rel-b' }))
+    store.reset()
+    const newReady = store.ready()
+    continueResolve()
+    await Promise.all([oldReady, newReady])
+    assert.equal(store.loaded, true)
+    assert.equal(store.releaseId, 'rel-b')
+    assert.equal(store.dataVersion, 'b'.repeat(64))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('ui API：check-update 联网对比（站点有更新 / 已最新 / 站点不可达）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prts-chk-'))
+  try {
+    const releasesDir = join(dir, 'releases')
+    await mkdir(releasesDir, { recursive: true })
+    await makeRelease(releasesDir, 'rel-a', 'a'.repeat(64))
+    await writeFile(join(releasesDir, 'current.json'), JSON.stringify({ release_id: 'rel-a', data_version: 'a'.repeat(64) }))
+    const shared = createSharedState({ configPath: join(dir, 'config.json'), releasesDir, patchConfig: {} })
+    await shared.loadConfig()
+    const quiet = { logger: { info: () => {}, warn: () => {} } }
+
+    // 站点发布 rel-new → 有更新
+    const mockFetch = (url) => {
+      if (String(url).endsWith('/api/agent/data/releases/current')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ data: { release_id: 'rel-new' } }) })
+      }
+      if (String(url).includes('/releases/rel-new/release-manifest.json')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({
+          release_id: 'rel-new', data_version: 'n'.repeat(64), document_count: 2,
+          compressed_size: 1000, created_at: '2026-02-01T00:00:00Z' }) })
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    }
+    const api = buildApi(shared, { ...quiet, fetchImpl: mockFetch })
+    const result = await api.call('GET', '/api/prts-corpus/check-update')
+    assert.equal(result.status, 200)
+    assert.equal(result.json.updateAvailable, true)
+    assert.equal(result.json.remote.releaseId, 'rel-new')
+    assert.equal(result.json.remote.documentCount, 2)
+    assert.equal(result.json.source, 'site')
+
+    // 站点发布的正是本地当前 → 已最新
+    const sameFetch = (url) => {
+      if (String(url).endsWith('/releases/current')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ data: { release_id: 'rel-a' } }) })
+      }
+      if (String(url).includes('/rel-a/release-manifest.json')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({
+          release_id: 'rel-a', data_version: 'a'.repeat(64), document_count: 1 }) })
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    }
+    const same = await buildApi(shared, { ...quiet, fetchImpl: sameFetch }).call('GET', '/api/prts-corpus/check-update')
+    assert.equal(same.status, 200)
+    assert.equal(same.json.updateAvailable, false)
+
+    // ModelScope 可解析 → 优先 ModelScope，完全不触达本站
+    let siteHit = false
+    const msFetch = (url) => {
+      const target = String(url)
+      if (target.includes('modelscope.cn')) {
+        if (target.includes('/repo/tree')) {
+          const payload = { Data: { Files: [
+            { Type: 'tree', Path: 'releases/rel-ms-latest' }] } }
+          return Promise.resolve({ ok: true, status: 200,
+            text: () => Promise.resolve(JSON.stringify(payload)) })
+        }
+        if (target.endsWith('dataset-manifest.json')) {
+          const payload = { release_id: 'rel-ms-latest', data_version: 'e'.repeat(64) }
+          return Promise.resolve({ ok: true, status: 200,
+            text: () => Promise.resolve(JSON.stringify(payload)) })
+        }
+        return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+      }
+      siteHit = true
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    }
+    const ms = await buildApi(shared, { ...quiet, fetchImpl: msFetch }).call('GET', '/api/prts-corpus/check-update')
+    assert.equal(ms.status, 200)
+    assert.equal(ms.json.source, 'modelscope')
+    assert.equal(ms.json.remote.releaseId, 'rel-ms-latest')
+    assert.equal(ms.json.remote.dataVersion, 'e'.repeat(64))
+    assert.equal(ms.json.updateAvailable, true)
+    assert.equal(siteHit, false, 'ModelScope 可用时不应触达本站')
+
+    // 站点不可达 → 不报错，remote=null + 可读提示
+    const failed = await buildApi(shared, { ...quiet, fetchImpl: () => Promise.reject(new Error('ENETUNREACH')) })
+      .call('GET', '/api/prts-corpus/check-update')
+    assert.equal(failed.status, 200)
+    assert.equal(failed.json.remote, null)
+    assert.equal(failed.json.updateAvailable, false)
+    assert.ok(failed.json.error)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('applyUi：挂载 Connection 认证 RPC 通道 + 结果/错误映射', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prts-http-'))
+  try {
+    const releasesDir = join(dir, 'releases')
+    await mkdir(releasesDir, { recursive: true })
+    const shared = createSharedState({ configPath: join(dir, 'config.json'), releasesDir, patchConfig: {} })
+    let channel = null
+    let handler = null
+    let options = null
+    const ctx = {
+      connection: { rpc: { handle: (nextChannel, nextHandler, nextOptions) => {
+        channel = nextChannel
+        handler = nextHandler
+        options = nextOptions
+        return () => {}
+      } } },
+      logger: { info: () => {} },
+    }
+    assert.equal(applyUi(ctx, shared), true)
+    assert.equal(channel, '/prts-corpus')
+    // 第三参 { authority } 在 rc.2 宿主上必填（缺失会 TypeError）；新宿主忽略。
+    assert.deepEqual(options, { authority: 'loopback' })
+    assert.equal(typeof handler, 'function')
+
+    const ok = await handler('status', {}, new AbortController().signal)
+    assert.equal(ok.ok, true)
+    assert.equal(ok.value.store.loaded, false)
+
+    const saved = await handler('config.update', { patch: { cloudEnabled: true } })
+    assert.equal(saved.ok, true)
+    assert.equal(saved.value.config.cloudEnabled, true)
+
+    const bad = await handler('config.update', { patch: { cloudEnabled: 'yes' } })
+    assert.equal(bad.ok, false)
+    assert.equal(bad.error.code, 'bad-request')
+    const unknown = await handler('unknown', {})
+    assert.equal(unknown.ok, false)
+    assert.equal(unknown.error.code, 'not-found')
+
+    // headless（无 connection）静默跳过
+    assert.equal(applyUi({}, shared), false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('ui API：read 拉全文（超限值被夹到契约范围，证据卡点开可读）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prts-read-'))
+  try {
+    const releasesDir = join(dir, 'releases')
+    await mkdir(releasesDir, { recursive: true })
+    await makeRelease(releasesDir, 'rel-a', 'a'.repeat(64))
+    await writeFile(join(releasesDir, 'current.json'), JSON.stringify({ release_id: 'rel-a', data_version: 'a'.repeat(64) }))
+    const shared = createSharedState({ configPath: join(dir, 'config.json'), releasesDir, patchConfig: {} })
+    await shared.loadConfig()
+    const store = new CorpusStore({ releasesDir })
+    shared.store = store
+    await store.ready()
+    const api = buildApi(shared, { logger: { info: () => {}, warn: () => {} } })
+
+    // 客户端传入超限的 max_lines/max_chars → 路由应夹到契约允许的最值，而不是让 executeRead 报错。
+    const clamped = await api.call('POST', '/api/prts-corpus/read', {
+      locator: { document_id: 'client:references:rel-a' },
+      selection: { mode: 'document' },
+      max_lines: 2000, max_chars: 200000,
+    })
+    assert.equal(clamped.status, 200)
+    assert.equal(clamped.json.ok, true)
+    assert.equal(clamped.json.response.status, 'ok')
+    assert.equal(clamped.json.response.normalized_request.limits.max_lines, 500)
+    assert.equal(clamped.json.response.normalized_request.limits.max_chars, 100000)
+    assert.equal(clamped.json.response.status, 'ok')
+    assert.equal(clamped.json.response.content.lines.length, 1)
+    assert.equal(clamped.json.response.content.lines[0].text, '正文-rel-a')
+
+    // 契约次小值：max_lines 最少 1、max_chars 最少 100 也被正确保留。
+    const minOk = await api.call('POST', '/api/prts-corpus/read', {
+      locator: { document_id: 'client:references:rel-a' },
+      selection: { mode: 'document' },
+      max_lines: 1, max_chars: 100,
+    })
+    assert.equal(minOk.json.ok, true)
+    assert.equal(minOk.json.response.normalized_request.limits.max_lines, 1)
+
+    // 缺定位器 → 400
+    const missing = await api.call('POST', '/api/prts-corpus/read', { selection: { mode: 'document' } })
+    assert.equal(missing.status, 400)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('ui API read：首行超过 max_chars 报 BUDGET_EXCEEDED；activity 定位直达契约层', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prts-read-edge-'))
+  try {
+    const releasesDir = join(dir, 'releases')
+    await mkdir(releasesDir, { recursive: true })
+    await makeRelease(releasesDir, 'rel-long', 'c'.repeat(64), '超长正文行'.repeat(24)) // 120 字符
+    await writeFile(join(releasesDir, 'current.json'), JSON.stringify({ release_id: 'rel-long', data_version: 'c'.repeat(64) }))
+    const shared = createSharedState({ configPath: join(dir, 'config.json'), releasesDir, patchConfig: {} })
+    await shared.loadConfig()
+    const store = new CorpusStore({ releasesDir })
+    shared.store = store
+    await store.ready()
+    const api = buildApi(shared, { logger: { info: () => {}, warn: () => {} } })
+
+    // 首行即超过 max_chars：显式报 BUDGET_EXCEEDED，而不是返回
+    // “0 行 ok + 原地 next_cursor”导致分页死循环。
+    const budget = await api.call('POST', '/api/prts-corpus/read', {
+      locator: { document_id: 'client:references:rel-long' },
+      selection: { mode: 'document' },
+      max_lines: 10, max_chars: 100,
+    })
+    assert.equal(budget.status, 200)
+    assert.equal(budget.json.ok, false)
+    assert.equal(budget.json.error.code, 'BUDGET_EXCEEDED')
+
+    // 放宽预算后同一文档正常读取。
+    const okRead = await api.call('POST', '/api/prts-corpus/read', {
+      locator: { document_id: 'client:references:rel-long' },
+      selection: { mode: 'document' },
+      max_lines: 10, max_chars: 1000,
+    })
+    assert.equal(okRead.json.ok, true)
+    assert.equal(okRead.json.response.content.lines.length, 1)
+
+    // activity 定位不再被“必须有 source_ref/document_id”的前置校验挡掉；
+    // 路由放行后由契约层报告活动不存在。
+    const activityRead = await api.call('POST', '/api/prts-corpus/read', {
+      locator: { activity_name: '不存在的活动' },
+      selection: { mode: 'activity' },
+    })
+    assert.equal(activityRead.status, 200)
+    assert.equal(activityRead.json.ok, false)
+    assert.equal(activityRead.json.error.code, 'DOCUMENT_NOT_FOUND')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('client bundle：ModuleLoader 工厂产出插件并注册皮肤设置与 PRTS 界面席位', async () => {
+  const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(source, /\[data-phase\]:not\(#prts-agent-scene\)/,
+    '运行态必须读取 Conversation，不能读回场景自身')
+  assert.match(source, /--agent-content-center/,
+    'PRTS 主视觉必须跟随 Conversation 的真实中心，而不是猜测侧栏宽度')
+  assert.match(source, /composerSeatRect\.top - currentY/,
+    '垂直间距必须测量包含工作区和模式工具栏的完整 composer seat')
+  assert.match(source, /heroRect\.bottom \+ 44 - baseComposerTop/,
+    '欢迎文案与完整 composer 必须根据真实矩形保留宽松间距')
+  assert.match(source, /--prts-agent-composer-y/,
+    '输入卡必须支持独立的响应式垂直位移')
+  assert.match(source, /\[data-conversation-scroll\]>:not\(\[data-composer-seat\]\)\{background:transparent!important\}/,
+    '进入会话时必须清除内容层完整背景，避免白色背景随淡入造成亮度跳变')
+  assert.doesNotMatch(source, /grid-template-columns:260px/,
+    '皮肤不能覆盖 Harness 自己的可调侧栏列宽')
+  assert.match(source, /cpuDebugBuffer !== 'priestess'/,
+    '必须保留原版 priestess CPU 彩蛋')
+  assert.match(source, /\.prts-cpu-assembly\.is-purple/,
+    'priestess 彩蛋必须有紫色 CPU 视觉')
+  assert.match(source, /scene\.dataset\.phase = 'leaving'/,
+    '空白态进入对话只过渡 PRTS 场景自身')
+  assert.doesNotMatch(source, /data-prts-hero-exit/,
+    '不能延迟切换整个会话内容透明度，否则约一秒后会发生亮度跳变')
+  assert.match(source, /\[data-phase="active"\]:not\(#prts-agent-scene\)>:first-child/,
+    '会话顶部栏样式必须排除 PRTS 场景，否则会把 560px 系统地图层染白')
+  assert.match(source, /\[data-chat-flow\]>\[data-chat-flow-key\]\{animation:prts-chat-history-enter/,
+    '历史记录加载完成后，新挂载的消息行必须立即柔和淡入')
+  assert.doesNotMatch(source, /> :not\(#prts-agent-scene\) \{ position: relative/,
+    '不能覆盖 body Portal 弹窗的 fixed 定位，否则添加工作区目录选择器会失效')
+  assert.doesNotMatch(source, /prts-corpus-status/,
+    '侧栏不再挂载重复且容易误报的资料状态卡')
+  let entry = null
+  const window = { __ModuleLoader__: { load: (value) => { entry = value } } }
+  vm.runInNewContext(source, { window, console })
+
+  assert.equal(entry.id, 'prts-terrarchive')
+  const reactStub = {
+    createElement: (...args) => ({ args }),
+    useState: (initial) => [initial, () => {}],
+    useEffect: () => {},
+    useCallback: (fn) => fn,
+    useMemo: (fn) => fn(),
+    useRef: (initial) => ({ current: initial }),
+    Fragment: 'Fragment',
+  }
+  const plugin = entry.factory((id) => {
+    if (id === 'react') return reactStub
+    throw new Error(`意外依赖 ${id}`)
+  })
+  assert.deepEqual([...plugin.inject], ['slots', 'connection', 'theme', 'sessions'])
+
+  const registrations = []
+  const themeLayers = []
+  const ctx = {
+    effect: (fn) => { const dispose = fn(); return dispose ?? (() => {}) },
+    slots: {
+      inject: (key, callback) => { registrations.push({ key, value: callback() }); return () => {} },
+      register: (options, component) => ({ options, component }),
+    },
+    connection: { rpc: { call: async (_path, endpoint) => ({ ok: true,
+      value: endpoint === 'status' ? { config: { uiSkin: 'prts-agent' } } : {} }) } },
+    theme: { overrideTokens: (source, tokens) => {
+      themeLayers.push({ source, tokens })
+      return () => {}
+    } },
+    sessions: { open: () => {}, create: async () => 'session' },
+  }
+  plugin.apply(ctx)
+  await new Promise((resolve) => { setImmediate(resolve) })
+  assert.equal(registrations.length, 2)
+  const byKey = Object.fromEntries(registrations.map((item) => [item.key, item.value]))
+  assert.equal(byKey['settings.plugins.tab'].options.id, 'prts-corpus')
+  assert.equal(byKey['conversation.session.header.utilities'].options.id, 'prts-evidence')
+  assert.equal(typeof byKey['settings.plugins.tab'].component, 'function')
+  assert.equal(typeof byKey['conversation.session.header.utilities'].component, 'function')
+  assert.equal(themeLayers.length, 1)
+  assert.equal(themeLayers[0].source, 'prts-terrarchive:prts-agent-skin')
+  assert.deepEqual(Object.keys(themeLayers[0].tokens['--dsw-alias-bg-base']).sort(), ['dark', 'light'])
+})

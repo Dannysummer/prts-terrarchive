@@ -1,0 +1,27 @@
+# PRTS.chat 本地语料插件层（工具层，随 bundle 默认加载）。
+# 插件零 npm 依赖；宿主只需提供 ctx.tools 注册表。
+# 五工具：corpus_search / corpus_read / timeline_search +（配置 cloud.baseUrl 时）cloud_search / cloud_inspect。
+# releasesDir 支持绝对路径或相对进程 cwd 的路径；默认 $DSH_HOME/prts-corpus/releases。
+- insert:
+    - id: prts-corpus
+      name: prts-terrarchive
+      config:
+        # host 常驻只做资料管理（/api + 设置 UI），不注册语料工具；
+        # 语料工具由 PRTS 预设（模式）的 agent.cordis.yml 加载时才注册。
+        registerTools: false
+        # releasesDir 省略时默认 $DSH_HOME/prts-corpus/releases；
+        # 如资料放在别处再填绝对路径（Windows 亦可用正斜杠）。
+        # releasesDir: D:/prts/agent-dsh/data/releases
+        # 设置页中的显式下载按此顺序选择来源；模式选择和首次请求都不会自动下载。
+        # download:
+        #   releaseId: agent-corpus-v1-20260826-timeline-v1   # 默认即此；换资料版本时改这里
+        #   order: [modelscope, site]                          # 下载源顺序，默认 ModelScope→站点
+        #   siteBaseUrl: https://prts.chat                     # 站点源地址
+        # cacheShards: 8
+        # 云端工具（省略则只注册本地三工具）：
+        # cloud:
+        #   baseUrl: https://prts.chat          # 本地开发可指 http://127.0.0.1:5565
+        #   game: arknights                     # arknights | endfield
+        #   # token: Bearer xxx                 # 静态 token；省略则走匿名 PoW 会话（init-session/login）
+        #   # userId: dsh-xxxx                  # 匿名会话 user_id；省略则每次加载随机
+        #   timeoutMs: 90000

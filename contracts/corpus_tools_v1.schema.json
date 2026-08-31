@@ -1,0 +1,1386 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prts.chat/schemas/corpus-tools-v1.schema.json",
+  "title": "PRTS.chat local corpus tool contracts v1",
+  "description": "Packaged Agent-subproject request and response contracts for corpus_search and corpus_read over official-game-corpus-index-v1.",
+  "$defs": {
+    "intentId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": ".*\\S.*"
+    },
+    "identifierList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/identifier"
+      }
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "corpusSearchRequest": {
+      "description": "corpus_search 请求（v4 扁平参数面）：query 与各过滤数组均位于顶层；query 缺省时至少需要一个过滤条件；cursor 必须单独提交，不能与其他参数同时出现。过滤值为 NFKC 归一化后的展示名。",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "description": "搜索词（≤512 码点）。优先使用实体名、篇名、活动名或原句片段，不要提交整句研究问题；match_mode=regex 时为受限正则（≤256 字符，拒绝高风险回溯结构）。匹配在 NFKC 归一化 + 小写后的文本上进行。",
+          "type": "string",
+          "maxLength": 2048
+        },
+        "match_mode": {
+          "type": "string",
+          "enum": [
+            "literal",
+            "regex"
+          ],
+          "default": "literal"
+        },
+        "resource_types": {
+          "description": "资料类型过滤（数组内 OR）。story=故事原文；character_profile=档案/招聘/潜能；character_module=模组；character_voice=语音；character_skin=时装；operator_record=干员密录；character_bundle=角色的档案+模组+语音+密录；character_wiki=规范角色 Wiki；story_wiki=活动/密录 Wiki；character_activity_wiki=角色×活动辅助 Wiki；reviewed_wiki=全部自建 Wiki；terra_journey=大地巡旅；entity_profile=实体资料；reference=时间线等引用资料。",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 14,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "story",
+              "character_profile",
+              "character_module",
+              "character_voice",
+              "character_skin",
+              "operator_record",
+              "character_bundle",
+              "character_wiki",
+              "story_wiki",
+              "character_activity_wiki",
+              "reviewed_wiki",
+              "terra_journey",
+              "entity_profile",
+              "reference"
+            ]
+          }
+        },
+        "character_names": {
+          "description": "角色展示名过滤，如“凯尔希”。",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": ".*\\S.*"
+          }
+        },
+        "story_names": {
+          "description": "剧情篇章展示名过滤；不要填写内部 story_id 或路径。",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": ".*\\S.*"
+          }
+        },
+        "activity_names": {
+          "description": "活动展示名过滤。",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": ".*\\S.*"
+          }
+        },
+        "entity_names": {
+          "description": "只返回出现指定实体的行（自动展开别名）。",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": ".*\\S.*"
+          }
+        },
+        "speakers": {
+          "description": "结构化说话人过滤，只匹配亲口台词。",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": ".*\\S.*"
+          }
+        },
+        "wiki_sections": {
+          "description": "Wiki 标签字段过滤（可与资料类型、角色、活动、query 组合）；无 query 的完整字段查询一次只能选一个值。",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "简要介绍",
+              "相关角色",
+              "详细介绍",
+              "剧情高光",
+              "战斗表现",
+              "相关活动",
+              "trivia",
+              "角色点评",
+              "剧情总结",
+              "关键人物",
+              "角色剧情概括",
+              "所有相关的活动剧情总结",
+              "相关剧情总结",
+              "相关剧情高光",
+              "相关trivia",
+              "相关角色总结"
+            ]
+          }
+        },
+        "context_terms": {
+          "description": "要求命中附近同时出现的语境词；需要 query、speakers 或 entity_names 作为主条件。",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "cursor": {
+          "description": "下一页原样复制上一页返回的 page.next_cursor；必须单独提交。",
+          "$ref": "#/$defs/cursor"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "query"
+          ]
+        },
+        {
+          "required": [
+            "resource_types"
+          ]
+        },
+        {
+          "required": [
+            "character_names"
+          ]
+        },
+        {
+          "required": [
+            "story_names"
+          ]
+        },
+        {
+          "required": [
+            "activity_names"
+          ]
+        },
+        {
+          "required": [
+            "entity_names"
+          ]
+        },
+        {
+          "required": [
+            "speakers"
+          ]
+        },
+        {
+          "required": [
+            "wiki_sections"
+          ]
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "cursor"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "query"
+                  ]
+                },
+                {
+                  "required": [
+                    "match_mode"
+                  ]
+                },
+                {
+                  "required": [
+                    "resource_types"
+                  ]
+                },
+                {
+                  "required": [
+                    "character_names"
+                  ]
+                },
+                {
+                  "required": [
+                    "story_names"
+                  ]
+                },
+                {
+                  "required": [
+                    "activity_names"
+                  ]
+                },
+                {
+                  "required": [
+                    "entity_names"
+                  ]
+                },
+                {
+                  "required": [
+                    "speakers"
+                  ]
+                },
+                {
+                  "required": [
+                    "wiki_sections"
+                  ]
+                },
+                {
+                  "required": [
+                    "context_terms"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "sourceRef": {
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^(?:official_game:(?:story:[^:]+|character:[^:]+:[^:]+)|client_data:(?:reviewed_wiki|terra_journey|entities|references):[0-9a-f]{24}):L[1-9][0-9]*$"
+    },
+    "documentSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document_id",
+        "document_type",
+        "document_category",
+        "document_kind",
+        "display_title",
+        "collection_id",
+        "activity_id",
+        "activity_name",
+        "source_story_id",
+        "story_id",
+        "story_code",
+        "story_name",
+        "part_type",
+        "part_label",
+        "char_id",
+        "character_name",
+        "path",
+        "text_sha256",
+        "line_count",
+        "sequence_index",
+        "sequence_source",
+        "sequence_confidence",
+        "previous_document_id",
+        "next_document_id",
+        "source_ref_prefix"
+      ],
+      "properties": {
+        "document_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "document_type": {
+          "type": "string",
+          "enum": [
+            "story",
+            "character",
+            "knowledge",
+            "entity",
+            "reference"
+          ]
+        },
+        "document_category": {
+          "type": "string"
+        },
+        "document_kind": {
+          "type": "string",
+          "enum": [
+            "story",
+            "synopsis",
+            "tutorial",
+            "character_material",
+            "wiki",
+            "terra_journey",
+            "entity_profile",
+            "reference"
+          ]
+        },
+        "display_title": {
+          "type": "string"
+        },
+        "collection_id": {
+          "type": "string"
+        },
+        "activity_id": {
+          "type": "string"
+        },
+        "activity_name": {
+          "type": "string"
+        },
+        "source_story_id": {
+          "type": "string"
+        },
+        "story_id": {
+          "type": "string"
+        },
+        "story_code": {
+          "type": "string"
+        },
+        "story_name": {
+          "type": "string"
+        },
+        "part_type": {
+          "type": "string",
+          "enum": [
+            "before",
+            "interlude",
+            "after",
+            "body"
+          ]
+        },
+        "part_label": {
+          "type": "string"
+        },
+        "char_id": {
+          "type": "string"
+        },
+        "character_name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "text_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "line_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sequence_index": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sequence_source": {
+          "type": "string"
+        },
+        "sequence_confidence": {
+          "type": "string",
+          "enum": [
+            "official",
+            "derived",
+            "source_order"
+          ]
+        },
+        "previous_document_id": {
+          "type": "string"
+        },
+        "next_document_id": {
+          "type": "string"
+        },
+        "source_ref_prefix": {
+          "type": "string"
+        }
+      }
+    },
+    "lineEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "line_number",
+        "line_type",
+        "speaker_raw",
+        "text",
+        "source_ref"
+      ],
+      "properties": {
+        "line_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_type": {
+          "type": "string",
+          "enum": [
+            "dialogue",
+            "narration",
+            "heading",
+            "knowledge"
+          ]
+        },
+        "speaker_raw": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "source_ref": {
+          "$ref": "#/$defs/sourceRef"
+        }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "pageInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limit",
+        "returned",
+        "has_more",
+        "next_cursor",
+        "total",
+        "total_relation"
+      ],
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "returned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/cursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "total_relation": {
+          "type": "string",
+          "enum": [
+            "eq",
+            "gte",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "executionStats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "elapsed_ms",
+        "scanned_documents",
+        "scanned_lines",
+        "returned_chars",
+        "estimated_input_tokens",
+        "truncated"
+      ],
+      "properties": {
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scanned_documents": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scanned_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "returned_chars": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimated_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "truncation_reason": {
+          "type": "string"
+        }
+      }
+    },
+    "readLocator": {
+      "description": "读取定位器，source_ref、document_id 与完整展示标题必须三选一。已有稳定行锚点时优先 source_ref。",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source_ref"
+          ],
+          "properties": {
+            "source_ref": {
+              "description": "完整稳定行引用；around 模式的中心行直接取自这里。",
+              "$ref": "#/$defs/sourceRef"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "document_id"
+          ],
+          "properties": {
+            "document_id": {
+              "description": "稳定文档 ID；around 模式配合它使用时必须提供 center_line。",
+              "$ref": "#/$defs/identifier"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "display_title"
+          ],
+          "properties": {
+            "display_title": {
+              "description": "资料中的完整展示标题；资料层将直接解析，无需预先搜索。",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "description": "按活动通读：定位到某个活动（活动 ID 或展示名），读取该活动全部剧情原文。",
+          "type": "object",
+          "additionalProperties": false,
+          "anyOf": [
+            {
+              "required": [
+                "activity_id"
+              ]
+            },
+            {
+              "required": [
+                "activity_name"
+              ]
+            }
+          ],
+          "properties": {
+            "activity_id": {
+              "description": "活动内部 ID（如 event:main_6，即 story 文档的 collection_id）。",
+              "$ref": "#/$defs/identifier"
+            },
+            "activity_name": {
+              "description": "活动展示名，如“局部坏死”“孤星”；活动 ID 与展示名至少给一个。",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "readSelection": {
+      "description": "读取范围：around 看锚点上下文，range 读已知行区间，section 精确读 Wiki 字段，document 分页读整篇。",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "section"
+          ],
+          "properties": {
+            "mode": {
+              "const": "section",
+              "description": "精确读取一篇 Wiki 中指定标签字段，不包含标签行。"
+            },
+            "section": {
+              "type": "string",
+              "enum": [
+                "简要介绍",
+                "相关角色",
+                "详细介绍",
+                "剧情高光",
+                "战斗表现",
+                "相关活动",
+                "trivia",
+                "角色点评",
+                "剧情总结",
+                "关键人物",
+                "角色剧情概括",
+                "所有相关的活动剧情总结",
+                "相关剧情总结",
+                "相关剧情高光",
+                "相关trivia",
+                "相关角色总结"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "const": "around",
+              "description": "读取中心行前后的上下文。"
+            },
+            "center_line": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "仅 locator 使用 document_id 时必填；locator 使用 source_ref 时省略。"
+            },
+            "before_lines": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 3
+            },
+            "after_lines": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 3
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "start_line",
+            "end_line"
+          ],
+          "properties": {
+            "mode": {
+              "const": "range",
+              "description": "读取包含起止行的闭区间。"
+            },
+            "start_line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "end_line": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "const": "document",
+              "description": "分页读取整篇文档。"
+            },
+            "cursor": {
+              "description": "下一页使用上一页响应的 next_cursor；首次省略。",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/cursor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "const": "activity",
+              "description": "按活动通读：配合 activity locator，按篇章顺序读取该活动全部剧情原文，跨多篇文档分页。"
+            },
+            "cursor": {
+              "description": "下一页使用上一页响应的 next_cursor；首次省略。",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/cursor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          }
+        }
+      ]
+    },
+    "readLimits": {
+      "description": "单次本地读取的行数和字符硬上限；大范围请求可能触发用户审批。",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_lines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 100
+        },
+        "max_chars": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 100000,
+          "default": 12000
+        }
+      }
+    },
+    "corpusReadRequest": {
+      "description": "读取本地资料正文并获得可引用的逐行 source_ref。搜索预览或云端候选不能替代本工具的原文核验。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent_id",
+        "locator",
+        "selection"
+      ],
+      "properties": {
+        "intent_id": {
+          "description": "当前用户检索意图的稳定 ID，由运行时注入。",
+          "$ref": "#/$defs/intentId"
+        },
+        "request_id": {
+          "$ref": "#/$defs/requestId"
+        },
+        "expected_data_version": {
+          "$ref": "#/$defs/sha256"
+        },
+        "locator": {
+          "description": "使用 source_ref 或 document_id 定位，二者不能同时提供。",
+          "$ref": "#/$defs/readLocator"
+        },
+        "selection": {
+          "description": "选择 around、range、section、document 或 activity 读取方式，并满足对应字段要求。",
+          "$ref": "#/$defs/readSelection"
+        },
+        "format": {
+          "description": "lines 保留每行 source_ref 并可引用；plain_text 仅适合连续阅读。",
+          "type": "string",
+          "enum": [
+            "lines",
+            "plain_text"
+          ],
+          "default": "lines"
+        },
+        "include_adjacent_documents": {
+          "type": "boolean",
+          "default": true
+        },
+        "limits": {
+          "$ref": "#/$defs/readLimits"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "locator": {
+                "required": [
+                  "document_id"
+                ]
+              },
+              "selection": {
+                "properties": {
+                  "mode": {
+                    "const": "around"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            },
+            "required": [
+              "locator",
+              "selection"
+            ]
+          },
+          "then": {
+            "properties": {
+              "selection": {
+                "required": [
+                  "center_line"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "locator": {
+                "required": [
+                  "source_ref"
+                ]
+              },
+              "selection": {
+                "properties": {
+                  "mode": {
+                    "const": "around"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            },
+            "required": [
+              "locator",
+              "selection"
+            ]
+          },
+          "then": {
+            "properties": {
+              "selection": {
+                "not": {
+                  "required": [
+                    "center_line"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "actualSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "line_start",
+        "line_end",
+        "line_count",
+        "character_count",
+        "truncated"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "around",
+            "range",
+            "section",
+            "document",
+            "activity"
+          ]
+        },
+        "line_start": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "character_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "truncation_reason": {
+          "type": "string"
+        },
+        "wiki_section": {
+          "description": "section 模式实际读取的 Wiki 字段名。",
+          "type": "string"
+        }
+      }
+    },
+    "linesContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "lines"
+      ],
+      "properties": {
+        "format": {
+          "const": "lines"
+        },
+        "lines": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/lineEntry"
+          }
+        }
+      }
+    },
+    "plainTextContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "text"
+      ],
+      "properties": {
+        "format": {
+          "const": "plain_text"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 100000
+        }
+      }
+    },
+    "corpusReadOkResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "status",
+        "request_id",
+        "data_version",
+        "package_schema_version",
+        "index_schema_version",
+        "normalized_request",
+        "document",
+        "selection",
+        "content",
+        "page",
+        "integrity",
+        "stats",
+        "warnings"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "prts-corpus-tools-v1"
+        },
+        "status": {
+          "const": "ok"
+        },
+        "request_id": {
+          "$ref": "#/$defs/requestId"
+        },
+        "data_version": {
+          "$ref": "#/$defs/sha256"
+        },
+        "package_schema_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "index_schema_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "normalized_request": {
+          "$ref": "#/$defs/corpusReadRequest"
+        },
+        "document": {
+          "$ref": "#/$defs/documentSummary"
+        },
+        "selection": {
+          "$ref": "#/$defs/actualSelection"
+        },
+        "content": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/linesContent"
+            },
+            {
+              "$ref": "#/$defs/plainTextContent"
+            }
+          ]
+        },
+        "page": {
+          "$ref": "#/$defs/pageInfo"
+        },
+        "activity": {
+          "description": "仅 activity 模式返回：当前读取活动的汇总。",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "activity_id",
+            "activity_name",
+            "story_count",
+            "total_lines"
+          ],
+          "properties": {
+            "activity_id": {
+              "type": "string"
+            },
+            "activity_name": {
+              "type": "string"
+            },
+            "story_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "total_lines": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "adjacent_documents": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "previous": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/documentSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "next": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/documentSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "integrity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verified",
+            "expected_text_sha256",
+            "actual_text_sha256"
+          ],
+          "properties": {
+            "verified": {
+              "type": "boolean"
+            },
+            "expected_text_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "actual_text_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "stats": {
+          "$ref": "#/$defs/executionStats"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
+    },
+    "approvalRequiredResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "status",
+        "request_id",
+        "data_version",
+        "normalized_request",
+        "approval"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "prts-corpus-tools-v1"
+        },
+        "status": {
+          "const": "approval_required"
+        },
+        "request_id": {
+          "$ref": "#/$defs/requestId"
+        },
+        "data_version": {
+          "$ref": "#/$defs/sha256"
+        },
+        "normalized_request": {
+          "$ref": "#/$defs/corpusReadRequest"
+        },
+        "approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "approval_request_id",
+            "request_sha256",
+            "reason",
+            "requested_documents",
+            "requested_lines",
+            "requested_characters",
+            "intent_cumulative_characters",
+            "estimated_input_tokens",
+            "estimated_cost",
+            "allowed_actions"
+          ],
+          "properties": {
+            "approval_request_id": {
+              "$ref": "#/$defs/requestId"
+            },
+            "request_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "raw_text_count",
+                "raw_text_characters",
+                "estimated_input_tokens",
+                "estimated_cost"
+              ]
+            },
+            "requested_documents": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "requested_lines": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "requested_characters": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "intent_cumulative_characters": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "intent_cumulative_records": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "intent_cumulative_lines": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "intent_cumulative_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "estimated_input_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "estimated_cost": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "currency": {
+              "type": "string"
+            },
+            "allowed_actions": {
+              "type": "array",
+              "minItems": 3,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "approve_once",
+                  "increase_intent_budget",
+                  "reject"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "toolError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "INVALID_REQUEST",
+            "PACKAGE_NOT_INSTALLED",
+            "PACKAGE_VERSION_MISMATCH",
+            "INDEX_UNAVAILABLE",
+            "INDEX_CORRUPT",
+            "DOCUMENT_NOT_FOUND",
+            "SOURCE_REF_INVALID",
+            "LINE_RANGE_INVALID",
+            "CURSOR_INVALID",
+            "CURSOR_VERSION_MISMATCH",
+            "CURSOR_POLICY_MISMATCH",
+            "REGEX_REJECTED",
+            "TIMEOUT",
+            "BUDGET_EXCEEDED",
+            "CANCELLED",
+            "INTERNAL_ERROR"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    },
+    "errorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "status",
+        "request_id",
+        "data_version",
+        "error"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "prts-corpus-tools-v1"
+        },
+        "status": {
+          "const": "error"
+        },
+        "request_id": {
+          "$ref": "#/$defs/requestId"
+        },
+        "data_version": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "$ref": "#/$defs/toolError"
+        }
+      }
+    },
+    "corpusSearchResponse": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/corpusSearchOkResponse"
+        },
+        {
+          "$ref": "#/$defs/errorResponse"
+        }
+      ]
+    },
+    "corpusReadResponse": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/corpusReadOkResponse"
+        },
+        {
+          "$ref": "#/$defs/approvalRequiredResponse"
+        },
+        {
+          "$ref": "#/$defs/errorResponse"
+        }
+      ]
+    }
+  }
+}

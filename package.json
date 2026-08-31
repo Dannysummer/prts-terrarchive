@@ -1,0 +1,83 @@
+{
+  "name": "prts-terrarchive",
+  "version": "0.1.0-alpha.1",
+  "description": "PRTS.chat local corpus search/read tools as a deepseek-harness plugin",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "prts-terrarchive": "./bin/install.js"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./skill": "./src/skill.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "lib",
+    "contracts",
+    "skills",
+    "cordis.patch.yml",
+    "bin/install.js",
+    "bin/pack-map-assets.mjs",
+    "README.md",
+    "README.en.md",
+    "GAME_ASSETS.md",
+    "THIRD_PARTY_NOTICES.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "arknights",
+    "endfield",
+    "corpus-search",
+    "rag",
+    "prts"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HTian-qwq/prts-terrarchive.git"
+  },
+  "homepage": "https://prts.chat",
+  "bugs": "https://github.com/HTian-qwq/prts-terrarchive/issues",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-settings-general",
+        "@deepseek-ai/dsh-client-ui-settings-plugins",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-theme",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "pack:map": "node bin/pack-map-assets.mjs",
+    "pack:map:restore": "node bin/pack-map-assets.mjs --restore",
+    "check": "node --check src/index.js && node --check src/search.js && node --check src/search-projection.js && node --check src/read.js && node --check src/wiki.js && node --check src/store.js && node --check src/source-map.js && node --check src/cloud-projection.js && node --check src/evidence-state.js && node --check src/entity-recognizer.js && node --check src/timeline.js && node --check src/cloud.js && node --check src/installer.js && node --check src/state.js && node --check src/ui.js && node --check src/skill.js && node --check lib/client.js && node --check bin/install.js && node --check bin/pack-map-assets.mjs",
+    "prepublishOnly": "npm run check",
+    "install:prts": "node bin/install.js"
+  }
+}

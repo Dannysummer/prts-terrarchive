@@ -1,0 +1,37 @@
+# 组合检索配方
+
+默认先以完整自然语言问题调用一次 `cloud_search`，再用以下配方收窄或核验。用户已经给出准确定位，或问题明确对应一个完整 Wiki 字段时，可以直接使用相应本地配方。
+
+## 角色参加过哪些活动
+
+1. `corpus_search(resource_types=["character_wiki"], character_names=[角色], wiki_sections=["相关活动"])`。
+2. 使用返回的完整字段，按原有顺序列出活动和角色作用；不要仅根据活动名再次全文搜索角色名来重建清单。
+3. 用户要求确认某项参与时，再用 `story/operator_record + activity_names + entity_names` 定位原文；简单逐字事实可直接引用搜索窗口，复杂场景再扩大上下文。
+
+## 某角色在某活动中的作用
+
+1. 可先读角色页 `相关活动`，确认该活动属于其经历。
+2. 查询 `story_wiki + activity_names=[活动] + wiki_sections=["角色剧情概括"] + query=角色`。
+3. 若需要更多过程，查询 `character_activity_wiki + character_names=[角色] + activity_names=[活动] + wiki_sections=["相关剧情总结"]`。
+4. 若需要具体行动、台词或人物归属，使用原文核验。
+
+## 某活动的整体研究
+
+1. 先使用云端结果建立事件与人物骨架；需要活动级完整整理时，读取 `story_wiki + activity_names + wiki_sections=["剧情总结"]`。
+2. 读取 `关键人物` 建立人物集合；针对目标人物读取 `角色剧情概括`。
+3. 用 `timeline_search(activity_names=[活动])` 排列相对或绝对时间。
+4. 对关键结论回到活动原文；不要求逐字证据时不必机械通读全部正文。
+
+## 人物关系
+
+1. 使用默认云端检索取得关系和事件骨架。
+2. 分别读取双方规范角色页的 `相关角色`，检查是否双向出现、叙述是否一致。
+3. 关系起因、变化或冲突需要 `scene_search`，再用本地原文核验。
+
+## 人物综合资料
+
+- 身份概览：`简要介绍`。
+- 生平与阶段：`详细介绍`。
+- 高光场面：`剧情高光`，随后按出处回原文。
+- 能力评价：`战斗表现 + character_profile + character_module`。
+- 趣闻：`trivia`；回答时标明是整理性资料。
