@@ -1,6 +1,6 @@
 # Game Asset Inventory
 
-This file identifies game-derived assets packaged for the optional Arknights: Endfield skin. These assets are not covered by the MIT License in [`LICENSE`](LICENSE).
+This file identifies game-derived resources packaged for the Arknights: Endfield map and skin experience. These resources are not covered by the MIT License in [`LICENSE`](LICENSE).
 
 ## Excluded paths
 
@@ -8,7 +8,7 @@ This file identifies game-derived assets packaged for the optional Arknights: En
 - `lib/endfield-map/resources/*.json.br`
 - `lib/endfield-map/resources/*.json.gz`
 
-The Brotli (`.br`) and gzip (`.gz`) files are alternate compressed representations of the same resource data.
+The Brotli (`.br`) and gzip (`.gz`) files are alternate compressed representations of map data and may include serialized geometry, materials, textures, or related presentation data used by the skin.
 
 The following project-authored implementation files are not part of this exclusion and remain covered by the MIT License:
 
