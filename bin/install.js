@@ -6,6 +6,7 @@
  *   npx prts-terrarchive@next web           # 安装当前发布版本到 web profile
  *   node bin/install.js web .               # 从源码目录安装
  *   node bin/install.js web /path/to/pkg    # 安装指定包、tarball 或源码目录
+ *   node bin/install.js web --preset-only   # 打包器已放置插件，只生成/迁移预设
  *
  * 环境变量：
  *   DSH_HOME   宿主根目录（缺省 ~/.dsh）；DSH 插件命令（缺省 dsh）
@@ -28,8 +29,10 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const packageDir = resolve(here, '..')
 const packageMetadata = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'))
-const profile = process.argv[2] || 'web'
-const pkg = process.argv[3] || `${packageMetadata.name}@${packageMetadata.version}`
+const presetOnly = process.argv.includes('--preset-only')
+const positionalArgs = process.argv.slice(2).filter((arg) => arg !== '--preset-only')
+const profile = positionalArgs[0] || 'web'
+const pkg = positionalArgs[1] || `${packageMetadata.name}@${packageMetadata.version}`
 const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
 const dshCmd = process.env.DSH || 'dsh'
 
@@ -58,7 +61,7 @@ const PRESET_COMPOSITION = [
   `- id: tool-web`,
   `  name: '@deepseek-ai/dsh-tool-web'`,
   `  config:`,
-  `    # DSH >= 0.1.2-alpha.2 内置安全 HTTP provider：仅允许公网 HTTP(S)，`,
+  `    # DSH >= 0.1.2-alpha.1 内置安全 HTTP provider：仅允许公网 HTTP(S)，`,
   `    # 并执行 DNS 校验、地址固定、同源跳转和响应大小限制。`,
   `    fetch: true`,
   `    searchTimeoutMs: 60000`,
@@ -121,15 +124,19 @@ function enableSafeWebFetch(composition) {
 
 console.log(`prts-terrarchive 一键安装 → profile「${profile}」`)
 
-console.log('\n[1/2] 把插件加入 profile（dsh plugin add）…')
-try {
-  run(dshCmd, ['plugin', '--profile', profile, 'add', pkg])
-  console.log('  已加入。')
-} catch (error) {
-  console.error(`  安装失败（${String(error?.message ?? error).split('\n')[0]}）。`)
-  console.error(`  请修复后重试：${dshCmd} plugin --profile ${profile} add ${pkg}`)
-  process.exitCode = 1
-  throw error
+if (!presetOnly) {
+  console.log('\n[1/2] 把插件加入 profile（dsh plugin add）…')
+  try {
+    run(dshCmd, ['plugin', '--profile', profile, 'add', pkg])
+    console.log('  已加入。')
+  } catch (error) {
+    console.error(`  安装失败（${String(error?.message ?? error).split('\n')[0]}）。`)
+    console.error(`  请修复后重试：${dshCmd} plugin --profile ${profile} add ${pkg}`)
+    process.exitCode = 1
+    throw error
+  }
+} else {
+  console.log('\n[1/2] 插件实体由发行版管理，跳过 dsh plugin add。')
 }
 
 console.log('\n[2/2] 创建 PRTS 用户预设…')

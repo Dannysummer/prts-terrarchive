@@ -18,7 +18,9 @@ as service capacity evolves.
 
 ## Install
 
-Requires Node.js >= 22.19 and `@deepseek-ai/dsh` >= 0.1.2-alpha.2.
+Requires Node.js >= 22.19 and a DSH runtime >= 0.1.2-alpha.1. Alpha.1 works
+when bundled by a desktop distribution or built from the official tag, but it
+was not published to npm; use 0.1.2-alpha.2 or newer for the npm command below.
 
 ```bash
 npm install --global @deepseek-ai/dsh@0.1.2-alpha.2
@@ -44,12 +46,27 @@ For development from a source checkout:
 node bin/install.js web .
 ```
 
+### anywhere-labs DSH Desktop
+
+Open the dedicated terminal from the DSH Desktop tray and target its
+`desktop` profile explicitly:
+
+```bash
+npx --yes prts-terrarchive@next desktop
+```
+
+Restart DSH Desktop after installation. Compatibility mode is the recommended
+starting point. A distribution that has already placed the package in its
+profile can run `node bin/install.js desktop --preset-only` to create or
+migrate only the PRTS mode preset.
+
 ### Windows
 
 The core plugin (local corpus tools, settings UI, dataset download) is pure
 Node and works on Windows directly:
 
-1. Install Node.js >= 22.19 and `@deepseek-ai/dsh@0.1.2-alpha.2`
+1. Install Node.js >= 22.19 and the npm-published `@deepseek-ai/dsh@0.1.2-alpha.2`
+   or newer
    (`npm i -g`, then make sure `dsh.cmd` is on PATH);
 2. Run `npx --yes prts-terrarchive@next web`. The installer invokes `dsh.cmd` through
    cmd.exe; paths containing `%` `&` `|` `<` `>` `^` `"` are rejected with a
@@ -102,8 +119,10 @@ for field semantics and query recipes.
 
 ## Compatibility
 
-Tested against `@deepseek-ai/dsh@0.1.2-alpha.2` (web profile). This is the
-minimum baseline with the safe HTTP fetch provider. The plugin
+Tested against DSH 0.1.2-alpha.1 and 0.1.2-alpha.2 (web profile). Alpha.1 was
+built from the official tag and passed installation, preset resolution, host
+startup, settings-route, and client-bundle checks. The safe anonymous HTTP
+fetch provider is available from alpha.1. The plugin
 relies on internal host surfaces (`ctx.tools`, `agent/pre-step`, host
 Connection RPC, webServer routes, agent presets, client slots/theme); after
 a DSH major upgrade, re-run the smoke checklist below.

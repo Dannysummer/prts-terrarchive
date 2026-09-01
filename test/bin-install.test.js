@@ -60,3 +60,23 @@ test('安装器为新旧 PRTS preset 幂等挂载网页工具和 tool-skill', as
     await rm(dshHome, { recursive: true, force: true })
   }
 })
+
+test('--preset-only 不调用 dsh，仍生成可用预设', async () => {
+  const dshHome = await mkdtemp(join(tmpdir(), 'prts-bin-preset-only-'))
+  try {
+    const result = spawnSync(process.execPath, [
+      join(packageDir, 'bin/install.js'), 'desktop', '--preset-only',
+    ], {
+      env: { ...process.env, DSH_HOME: dshHome, DSH: join(dshHome, 'must-not-run') },
+      encoding: 'utf8',
+    })
+    assert.equal(result.status, 0, result.stderr)
+    const composition = await readFile(
+      join(dshHome, '.agent-presets', 'prts', 'agent.cordis.yml'), 'utf8')
+    assert.match(composition, /- id: prts-corpus/)
+    assert.match(composition, /- id: tool-web/)
+    assert.match(composition, /fetch: true/)
+  } finally {
+    await rm(dshHome, { recursive: true, force: true })
+  }
+})

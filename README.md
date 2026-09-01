@@ -31,8 +31,11 @@ Agent 可以离线检索并按官方行号阅读原文；可选的 PRTS.chat 云
 ## 环境要求
 
 - Node.js **≥ 22.19**
-- `@deepseek-ai/dsh` **≥ 0.1.2-alpha.2**（支持安全 `web_fetch` 的最低基线）
+- DSH 运行时 **≥ 0.1.2-alpha.1**（已验证安全 `web_fetch` provider 与插件完整加载）
 - 磁盘空间：资料包约 **322 MiB**（+ 解压缓存）
+
+> `0.1.2-alpha.1` 可用于桌面整合包或从官方 tag 构建，但该版本未发布到 npm。
+> 通过 npm 安装 DSH 时请使用 `0.1.2-alpha.2` 或更新版本。
 
 ## 安装
 
@@ -51,11 +54,23 @@ npx --yes prts-terrarchive@next web
 node bin/install.js web .
 ```
 
+### DSH Desktop（anywhere-labs）
+
+在 DSH Desktop 托盘菜单打开的专用终端中，把插件安装到 `desktop` profile：
+
+```bash
+npx --yes prts-terrarchive@next desktop
+```
+
+安装后重启 DSH Desktop。插件使用普通 DSH Host/Web Client 接口；建议先使用 Desktop
+的兼容模式。发行版打包器如果已经把插件实体放入 profile，可执行
+`node bin/install.js desktop --preset-only`，只生成或迁移「PRTS 模式」preset。
+
 ### Windows
 
 核心功能（本地三工具、设置页、资料下载）为纯 Node 实现，Windows 直接可用：
 
-1. 安装 Node.js ≥ 22.19 与 `@deepseek-ai/dsh@0.1.2-alpha.2`（`npm i -g` 后确认 `dsh.cmd` 命令可用）；
+1. 安装 Node.js ≥ 22.19 与 npm 可用的 `@deepseek-ai/dsh@0.1.2-alpha.2` 或更新版本（`npm i -g` 后确认 `dsh.cmd` 命令可用）；
 2. 执行 `npx --yes prts-terrarchive@next web`。安装脚本经 cmd 调用 `dsh.cmd`，路径含
    `%` `&` `|` `<` `>` `^` `"` 等字符时会明确报错——把项目放到不含这些字符的
    目录（或设置 `DSH` 环境变量指向 `dsh.cmd` 绝对路径）即可；
@@ -151,7 +166,7 @@ node bin/install.js web .
 ### web_search / web_fetch — DSH 原生网页工具
 
 由 PRTS 模式挂载：`web_search` 发现网页候选，`web_fetch` 读取已知 URL 正文，
-用于语料之外的历史沿革、词源、民俗等公网信息核验。DSH `0.1.2-alpha.2` 的匿名
+用于语料之外的历史沿革、词源、民俗等公网信息核验。DSH `0.1.2-alpha.1` 起的匿名
 HTTP provider 只允许公网 HTTP(S)，并包含 DNS 解析校验、连接地址固定、同源重定向
 以及响应大小和超时限制。
 
@@ -264,7 +279,9 @@ skills/prts-retrieval/   检索策略技能（字段语义、检索配方）
 
 ## 兼容性
 
-已对照 `@deepseek-ai/dsh@0.1.2-alpha.2`（web profile）真机验证。插件依赖宿主内部
+已对照 DSH `0.1.2-alpha.1` 与 `0.1.2-alpha.2`（web profile）真机验证；其中
+`alpha.1` 通过官方 tag 构建并完成安装、预设解析、宿主启动、设置路由和客户端 bundle
+加载检查。插件依赖宿主内部
 接口（`ctx.tools`、`agent/pre-step`、Host Connection RPC、webServer 路由、agent 预设、
 客户端 slots/theme）；DSH 大版本升级后请按「安装 → 重启 → 设置页 → PRTS 模式 →
 语料工具 → 网页工具 → 皮肤 → 版本热切换」过一遍冒烟。
