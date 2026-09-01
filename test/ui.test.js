@@ -476,6 +476,50 @@ test('client bundle：ModuleLoader 工厂产出插件并注册皮肤设置与 PR
     throw new Error(`意外依赖 ${id}`)
   })
   assert.deepEqual([...plugin.inject], ['slots', 'connection', 'theme', 'sessions'])
+  const sceneNodes = new Map([
+    ['cloud', { kind: 'tool-call', data: { root: {
+      kind: 'tool-result', call: { name: 'cloud_search',
+        argsRaw: JSON.stringify({ query: '普瑞赛斯的目的', depth: 'standard' }) },
+      content: [], isError: false, time: 2,
+    } } }],
+    ['search', { kind: 'tool-call', data: { root: {
+      kind: 'tool-result', call: { name: 'corpus_search',
+        argsRaw: JSON.stringify({ query: { text: '普瑞赛斯' }, resource_types: ['story'] }) },
+      content: [], isError: false, time: 3,
+    } } }],
+    ['read', { kind: 'tool-call', data: { root: {
+      name: 'corpus_read', argsRaw: JSON.stringify({ title: '孤星 · CW-ST-3 · 行动后',
+        selection: { mode: 'range', start_line: 120, end_line: 146 } }), time: 4,
+    } } }],
+  ])
+  const runningScene = plugin.__sceneStateForTest.buildSceneSnapshotModel(
+    ['cloud', 'search', 'read'], { get: (key) => sceneNodes.get(key) })
+  assert.equal(runningScene.plan.state, 'complete')
+  assert.equal(runningScene.recall.state, 'complete')
+  assert.equal(runningScene.read.state, 'active')
+  assert.equal(runningScene.verify.state, 'active')
+  assert.equal(runningScene.query.text, '普瑞赛斯')
+  assert.equal(runningScene.query.scope, 'story')
+  assert.equal(runningScene.source.title, '孤星 · CW-ST-3 · 行动后')
+  assert.equal(runningScene.source.range, 'L120—L146')
+  assert.equal(Array.from(runningScene.stack).join('\n'), [
+    '01  cloud.search  ×1', '02  corpus.search ×1', '03  source.read   ×1',
+  ].join('\n'))
+
+  sceneNodes.set('read', { kind: 'tool-call', data: { root: {
+    kind: 'tool-result', call: { name: 'corpus_read',
+      argsRaw: JSON.stringify({ title: '孤星 · CW-ST-3 · 行动后',
+        selection: { mode: 'range', start_line: 120, end_line: 146 } }) },
+    content: [], isError: false, time: 5,
+  } } })
+  sceneNodes.set('answer', { kind: 'assistant-step', data: {
+    status: 'settled', blocks: [{ kind: 'text', text: '根据原文……' }],
+  } })
+  const completeScene = plugin.__sceneStateForTest.buildSceneSnapshotModel(
+    ['cloud', 'search', 'read', 'answer'], { get: (key) => sceneNodes.get(key) })
+  assert.equal(completeScene.read.state, 'complete')
+  assert.equal(completeScene.verify.state, 'complete')
+  assert.equal(completeScene.tickerState, 'DONE')
 
   const registrations = []
   const themeLayers = []
