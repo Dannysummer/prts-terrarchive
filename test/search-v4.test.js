@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { executeSearch } from '../src/search.js'
+import { naturalDocumentTitle } from '../src/store.js'
 
 function fakeStore(records, { dataVersion = 'test-v1' } = {}) {
   const documents = new Map()
@@ -44,16 +45,44 @@ function story(index, text) {
   }
 }
 
+test('全部公开资料类型都有可读且带类型的自然标题', () => {
+  const titles = [
+    naturalDocumentTitle({ document_type: 'story', document_category: 'main',
+      activity_name: '孤星', story_code: 'CW-ST-4', story_name: '孤星', part_label: '行动后' }),
+    naturalDocumentTitle({ document_type: 'story', document_category: 'memory',
+      character_name: '凯尔希', activity_name: '未尽之愿', story_name: '未尽之愿', part_label: '正文' }),
+    naturalDocumentTitle({ document_type: 'story', document_category: 'rogue',
+      collection_id: 'rogue:month_chat', sequence_index: 7, part_label: '正文' }),
+    naturalDocumentTitle({ document_type: 'character', display_title: '凯尔希 / 干员档案' }),
+    naturalDocumentTitle({ document_type: 'knowledge', document_kind: 'wiki',
+      display_title: '孤星', path: 'stories/lone_trail.txt' }),
+    naturalDocumentTitle({ document_type: 'knowledge', document_kind: 'wiki',
+      display_title: '恶兆湍流', path: 'char_v3/prompt_char_003.txt', sequence_index: 17 }),
+    naturalDocumentTitle({ document_type: 'knowledge', document_kind: 'terra_journey',
+      display_title: '移动城市的建造模式' }),
+    naturalDocumentTitle({ document_type: 'entity', display_title: '乌萨斯' }),
+    naturalDocumentTitle({ document_type: 'reference', display_title: 'terra_timeline' }),
+  ]
+  assert.deepEqual(titles, [
+    '孤星 · CW-ST-4 · 行动后',
+    '凯尔希 · 干员密录 · 未尽之愿 · 正文',
+    '集成战略文本 · month_chat · 第 7 篇 · 正文',
+    '凯尔希 / 干员档案', '孤星 / 活动 Wiki', '恶兆湍流 / 角色活动 Wiki · 第 17 篇',
+    '移动城市的建造模式 / 大地巡旅', '乌萨斯 / 实体资料', '泰拉年表',
+  ])
+  assert.ok(titles.every((title) => title && title !== '正文'))
+})
+
 async function exhaust(store, request) {
   const pages = []
   let value = await executeSearch(store, request)
   for (let calls = 0; ; calls += 1) {
-    assert.ok(calls < 100, 'cursor chain did not exhaust')
+    assert.ok(calls < 100, 'title continuation chain did not exhaust')
     assert.equal(value.error, undefined)
     pages.push(value)
     if (value.page.exhausted) return pages
-    assert.match(value.page.next_cursor, /^s4\./u)
-    value = await executeSearch(store, { cursor: value.page.next_cursor })
+    assert.ok(value.page.next_after?.title)
+    value = await executeSearch(store, { ...request, after: value.page.next_after })
   }
 }
 
@@ -66,17 +95,19 @@ test('v4 可返回空进度页，并从下一未消费 ordinal 继续到精确�
   assert.equal(first.page.exhausted, false)
   assert.equal(first.page.total_relation, 'unknown')
   assert.equal(first.page.total_documents, undefined)
-  assert.match(first.page.next_cursor, /^s4\./u)
+  assert.deepEqual(first.page.next_after,
+    { resource_type: 'story', title: '测试活动 · T-255 · 测试篇章 255', position: 255 })
+  assert.equal(first.page.next_cursor, undefined)
 
   const replay = await executeSearch(store, { query: '针尖' })
   assert.deepEqual(replay, first)
 
-  const final = await executeSearch(store, { cursor: first.page.next_cursor })
+  const final = await executeSearch(store, { query: '针尖', after: first.page.next_after })
   assert.equal(final.page.exhausted, true)
   assert.equal(final.page.has_more, false)
-  assert.equal(final.page.next_cursor, null)
-  assert.equal(final.page.total_relation, 'eq')
-  assert.equal(final.page.total_documents, 1)
+  assert.equal(final.page.next_after, null)
+  assert.equal(final.page.total_relation, 'unknown')
+  assert.equal(final.page.total_documents, undefined)
   assert.deepEqual(final.documents.map((item) => item.title),
     ['测试活动 · T-299 · 测试篇章 299'])
 })
@@ -87,31 +118,32 @@ test('v4 多页结果按文档稳定归并，全链不重不漏', async () => {
   assert.deepEqual(pages.map((page) => page.documents.length), [12, 12, 6])
   const titles = pages.flatMap((page) => page.documents.map((document) => document.title))
   assert.equal(new Set(titles).size, 30)
-  assert.equal(pages.at(-1).page.total_documents, 30)
-  assert.equal(pages.at(-1).page.total_relation, 'eq')
+  assert.equal(pages.at(-1).page.total_relation, 'unknown')
   assert.ok(pages.slice(0, -1).every((page) => page.page.exhausted === false
     && page.truncation_reasons.includes('scan_incomplete')))
 })
 
-test('v4 cursor 只能单独提交，篡改或切换资料版本会明确失败', async () => {
+test('v4 使用资料类型与自然标题续页，且可与所有搜索条件一起提交', async () => {
   const store = fakeStore(Array.from({ length: 20 }, (_, index) => story(index, '命中')))
   const first = await executeSearch(store, { query: '命中' })
-  const mixed = await executeSearch(store, { cursor: first.page.next_cursor, query: '别的词' })
-  assert.equal(mixed.error.code, 'INVALID_REQUEST')
+  assert.deepEqual(first.page.next_after,
+    { resource_type: 'story', title: '测试活动 · T-11 · 测试篇章 11', position: 11 })
+  const second = await executeSearch(store, {
+    query: '命中', resource_types: ['story'], activity_names: ['测试活动'],
+    after: first.page.next_after,
+  })
+  assert.equal(second.error, undefined)
+  assert.deepEqual(second.documents.map((item) => item.title),
+    Array.from({ length: 8 }, (_, index) => `测试活动 · T-${index + 12} · 测试篇章 ${index + 12}`))
 
-  const tamperedCursor = `${first.page.next_cursor.slice(0, -1)}x`
-  const tampered = await executeSearch(store, { cursor: tamperedCursor })
-  assert.equal(tampered.error.code, 'CURSOR_INVALID')
-
-  store.dataVersion = 'test-v2'
-  const stale = await executeSearch(store, { cursor: first.page.next_cursor })
-  assert.equal(stale.error.code, 'CURSOR_VERSION_MISMATCH')
+  const invalid = await executeSearch(store, { query: '命中', after: { title: '缺少类型' } })
+  assert.equal(invalid.error.code, 'INVALID_REQUEST')
+  const missing = await executeSearch(store, { query: '命中',
+    after: { resource_type: 'story', title: '不存在的资料', position: 999 } })
+  assert.equal(missing.error.code, 'PAGE_ANCHOR_NOT_FOUND')
 })
 
-test('极端合法过滤下的游标仍可往返解码，单项超长被拒绝', async () => {
-  // activity_names 是数组内 OR：放一个真实活动名 + 15 个 512 字填充项，
-  // 既不过滤掉任何文档，又把游标解压后体积推到约 24KB——超过旧的 16KB
-  // 解压上限，此前会首次搜索成功、翻页却 CURSOR_INVALID。
+test('极端合法过滤可随标题锚点重复提交，单项超长被拒绝', async () => {
   const store = fakeStore(Array.from({ length: 40 }, (_, index) => story(index, `命中 ${index}`)))
   const request = {
     query: '命中',
@@ -121,9 +153,8 @@ test('极端合法过滤下的游标仍可往返解码，单项超长被拒绝',
   const first = await executeSearch(store, request)
   assert.equal(first.error, undefined, JSON.stringify(first.error))
   assert.ok(first.documents.length > 0, '真实活动名应保留全部候选')
-  assert.ok(first.page.next_cursor.length > 0)
-  assert.ok(first.page.next_cursor.length < 65_536)
-  const second = await executeSearch(store, { cursor: first.page.next_cursor })
+  assert.ok(first.page.next_after?.title)
+  const second = await executeSearch(store, { ...request, after: first.page.next_after })
   assert.equal(second.error, undefined, JSON.stringify(second.error))
 
   const oversized = await executeSearch(store, {

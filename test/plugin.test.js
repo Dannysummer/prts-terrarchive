@@ -69,11 +69,11 @@ async function collectSearchDocuments(searchTool, request) {
   const documents = []
   let page = await searchTool.execute(request, {})
   for (let calls = 0; ; calls += 1) {
-    assert.ok(calls < 100, 'corpus_search cursor chain did not exhaust')
+    assert.ok(calls < 100, 'corpus_search title continuation chain did not exhaust')
     documents.push(...page.documents)
     if (page.page.exhausted) return { documents, final: page }
-    assert.match(page.page.next_cursor, /^s4\./u)
-    page = await searchTool.execute({ cursor: page.page.next_cursor }, {})
+    assert.ok(page.page.next_after?.title)
+    page = await searchTool.execute({ ...request, after: page.page.next_after }, {})
   }
 }
 
@@ -449,7 +449,7 @@ test.skip('legacy search/read 富响应兼容轨迹（v2 facade 已替换）', a
   dispose()
 })
 
-test('v4 facade：可穷尽按文档搜索、完整 Wiki 字段、自然读取与 cursor-only', async () => {
+test('v4 facade：可穷尽按文档搜索、完整 Wiki 字段、自然读取与标题锚点', async () => {
   const plugin = await import('../src/index.js')
   const { registered, ctx, dispose } = makeCtx()
   await plugin.apply(ctx, LOCAL_CONFIG)
@@ -494,11 +494,10 @@ test('v4 facade：可穷尽按文档搜索、完整 Wiki 字段、自然读取�
     assert.ok(match.excerpt.some((line) => line.role === 'match'))
     assert.match(match.citation, /^《.+》第 \d+(?:-\d+)? 行$/u)
 
-    if (searched.page.next_cursor) {
-      const next = await searchTool.execute({ cursor: searched.page.next_cursor }, {})
+    if (searched.page.next_after) {
+      const next = await searchTool.execute({ query: '重生', resource_types: ['story'],
+        after: searched.page.next_after }, {})
       assert.equal(next.result_kind, searched.result_kind)
-      await assert.rejects(searchTool.execute({ cursor: searched.page.next_cursor, query: '凯尔希' }, {}),
-        /cursor 必须单独提交/u)
     }
 
     const sections = await searchTool.execute({ resource_types: ['character_wiki'],
@@ -527,10 +526,10 @@ test('v4 facade：可穷尽按文档搜索、完整 Wiki 字段、自然读取�
     assert.equal(snowPriest.primary.title, '雪祀 / 实体资料')
     assert.match(JSON.stringify(snowPriest.primary.lines), /history_summary/u)
 
-    const wikiByNaturalTitle = await readTool.execute({ title: '凯尔希', section: '相关活动' },
+    const wikiByNaturalTitle = await readTool.execute({ title: '凯尔希 / 角色 Wiki', section: '相关活动' },
       { agent: {}, callId: 'v2-read-wiki-natural-title' })
     assert.equal(wikiByNaturalTitle.primary.kind, 'wiki_curated')
-    assert.match(wikiByNaturalTitle.primary.citation, /《凯尔希》Wiki·相关活动/u)
+    assert.match(wikiByNaturalTitle.primary.citation, /《凯尔希 \/ 角色 Wiki》Wiki·相关活动/u)
 
     const read = await readTool.execute({ title: document.title, line: match.line_start,
       before: 1, after: 1 }, { agent: {}, callId: 'v2-read' })

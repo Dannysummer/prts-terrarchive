@@ -115,10 +115,11 @@ npx --yes prts-terrarchive@next desktop
 | `speakers` | 结构化说话人过滤，只匹配亲口台词 |
 | `wiki_sections` | Wiki 标签字段过滤（相关活动、剧情总结、角色剧情概括等 16 种） |
 | `context_terms` | 要求命中附近（±3 行）同时出现的语境词，≤8 个 |
-| `cursor` | 下一页原样复制上一页返回的 `next_cursor`；必须单独提交 |
+| `after` | 下一页的可读标题锚点 `{ resource_type, title, position }`；与原搜索条件一起提交 |
 
 约束：过滤数组每项非空、最多 16 项、单项最长 512 码点。结果预算固定，
-沿 `cursor` 可确定性扫描到 `exhausted=true`。
+保留原搜索条件，并把返回的 `next_after` 原样放入 `after`，可确定性扫描到
+`exhausted=true`。锚点使用资料类型和自然标题，不向模型暴露内部签名串。
 
 **资料类型（resource_types）**：`story` 官方剧情原文；`character_profile` 档案/招聘/
 潜能；`character_module` 模组；`character_voice` 语音；`character_skin` 时装；

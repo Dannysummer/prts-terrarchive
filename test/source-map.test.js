@@ -18,10 +18,8 @@ test('每篇资料有稳定 document_uid，云端来源可映射到本地标题�
     cursorSecretPath: resolve(stateDir, 'cursor-secret.bin') })
   const search = await executeSearch(store, { query: '重生', resource_types: ['story'] })
   assert.ok(search.documents.length > 0)
-  assert.ok(search.page.next_cursor)
-  assert.match(search.page.next_cursor, /^s4\./u)
-  assert.ok(search.page.next_cursor.length < 160,
-    `模型可见搜索 cursor 应保持紧凑，实际 ${search.page.next_cursor.length} 字符`)
+  assert.ok(search.page.next_after?.title)
+  assert.equal(search.page.next_cursor, undefined, '模型可见结果不应再暴露内部 cursor')
   const hit = search.documents[0]
   const found = await store.getDocumentByTitle(hit.title)
   const documentId = found.record.document.document_id
@@ -29,16 +27,11 @@ test('每篇资料有稳定 document_uid，云端来源可映射到本地标题�
   assert.ok(target)
   assert.match(hit.title, / · /u, '剧情命中应使用活动、章节、篇名、行动前后的自然语言完整标题')
 
-  // 模拟进程重启后重新读取持久密钥；旧游标仍可续页且不会重复首条。
+  // 可读标题锚点可以和原搜索条件一起提交，且不会重复首条。
   store._cursorSecret = null
-  const nextPage = await executeSearch(store, { cursor: search.page.next_cursor })
+  const nextPage = await executeSearch(store, { query: '重生', resource_types: ['story'],
+    after: search.page.next_after })
   assert.notEqual(nextPage.documents[0].title, hit.title)
-
-  const last = search.page.next_cursor.at(-1)
-  const tampered = `${search.page.next_cursor.slice(0, -1)}${last === 'A' ? 'B' : 'A'}`
-  const rejectedCursor = await executeSearch(store, { cursor: tampered })
-  assert.equal(rejectedCursor.status, 'error')
-  assert.equal(rejectedCursor.error.code, 'CURSOR_INVALID')
 
   // 资料包只有 trigram 倒排；两字查询必须走 JSONL 分片预筛，不能退回全库
   // 逐文档解析并在硬时间预算内报 TIMEOUT。
@@ -99,7 +92,7 @@ test('主项目短文件名与同关卡多篇剧情可确定性映射', async ()
   }])
   assert.equal(wiki.length, 1)
   assert.equal(wiki[0].mapping_method, 'source_file_basename')
-  assert.equal(wiki[0].title, '恶兆湍流')
+  assert.match(wiki[0].title, /^恶兆湍流 \/ 角色活动 Wiki · 第 \d+ 篇$/u)
 
   const beforeId = 'story:obt/main/level_main_15-15_beg'
   const before = await store.getDocument(beforeId)

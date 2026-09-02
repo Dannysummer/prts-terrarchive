@@ -106,15 +106,18 @@ export function projectSearch(value, options = {}) {
       ? `# 返回 ${documents.length} 篇资料的完整字段`
       : `# 找到 ${documents.length} 篇资料，共展示 ${matches} 处命中`
   const exhausted = value?.page?.exhausted === true
-  const next = value?.page?.next_cursor
-    ? `扫描尚未穷尽。继续：corpus_search({cursor:"${value.page.next_cursor}"})` : ''
+  const next = value?.page?.next_after
+    ? `扫描尚未穷尽。继续时保留本次搜索词和过滤条件，并设置 after: ${JSON.stringify(value.page.next_after)}。` : ''
   const zero = documents.length ? '' : exhausted
     ? '已检查完整检索范围，没有找到。请检查展示名、缩短连续字面串或移除冲突过滤条件。'
-    : value?.page?.next_cursor
+    : value?.page?.next_after
       ? '本页没有发现命中文档，但扫描位置已经推进；这不是全库零命中。'
       : '该旧版分页链已经结束，但不能证明资料范围已经穷尽；需要完整性时请重新搜索。'
   const complete = exhausted && documents.length
-    ? `已检查完整检索范围，共匹配 ${value.page.total_documents} 篇资料。` : ''
+    ? Number.isInteger(value.page.total_documents)
+      ? `已检查完整检索范围，共匹配 ${value.page.total_documents} 篇资料。`
+      : '已扫描至当前检索范围末尾。'
+    : ''
   return [heading, ...documents.map((document) => renderDocument(document, options)), zero, complete, next]
     .filter(Boolean).join('\n\n')
 }

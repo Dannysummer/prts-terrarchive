@@ -95,20 +95,55 @@ export function documentUid(documentId) {
     .digest('base64url').slice(0, 16)}`
 }
 
-/** 模型/界面使用的自然语言篇章定位；剧情补齐活动、章节代码与行动前后。 */
+/** 模型/界面使用的自然语言资料定位；各资料类型都带上可辨认的标题与类型。 */
 export function naturalDocumentTitle(document = {}) {
+  const displayTitle = String(document.display_title || '').trim()
   if (document.document_type === 'entity') {
-    const title = String(document.display_title || '').trim()
-    return title ? `${title} / 实体资料` : ''
+    return displayTitle ? `${displayTitle} / 实体资料` : ''
   }
-  if (document.document_type !== 'story') return String(document.display_title || '')
+  if (document.document_type === 'character') return displayTitle
+  if (document.document_type === 'knowledge') {
+    if (document.document_kind === 'terra_journey') return `${displayTitle} / 大地巡旅`
+    if (document.document_kind === 'wiki') {
+      const path = String(document.path || '')
+      if (path.startsWith('stories/')) return `${displayTitle} / 活动 Wiki`
+      if (path.startsWith('char_v3/prompt_')) {
+        const sequence = Number.isInteger(document.sequence_index) ? ` · 第 ${document.sequence_index} 篇` : ''
+        return `${displayTitle} / 角色活动 Wiki${sequence}`
+      }
+      if (path.startsWith('char_v3/extended_')) return `${displayTitle} / 角色补充 Wiki`
+      return `${displayTitle} / 角色 Wiki`
+    }
+    return displayTitle
+  }
+  if (document.document_type === 'reference') {
+    const labels = { activity_timelines: '活动时间线', char_alias: '角色别名表',
+      terra_timeline: '泰拉年表' }
+    return labels[displayTitle] || displayTitle
+  }
+  if (document.document_type !== 'story') return displayTitle
   const variation = /_variation0*(\d+)(?:\.[^./]+)?$/iu.exec(
     String(document.source_story_id || document.document_id || ''),
   )
-  return [document.activity_name, document.story_code, document.story_name, document.part_label,
+  const identity = [...new Set([document.activity_name, document.story_code, document.story_name]
+    .map((item) => String(item || '').trim()).filter(Boolean))]
+  if (!identity.length) {
+    const labels = { rogue: '集成战略文本', system: '游戏系统文本', guide: '游戏教程文本' }
+    const label = labels[String(document.document_category || '')] || '游戏内原文'
+    const collection = String(document.collection_id || '').split(':').at(-1)?.split('/').at(-1)
+    const sequence = Number.isInteger(document.sequence_index) ? `第 ${document.sequence_index} 篇` : ''
+    const fallback = [label, collection && !['other', 'obt'].includes(collection) ? collection : '', sequence,
+      document.part_label].filter(Boolean).join(' · ')
+    return fallback || displayTitle
+  }
+  const memoryPrefix = document.document_category === 'memory' && document.character_name
+    ? [document.character_name, '干员密录'] : []
+  const sequenceSuffix = document.document_category === 'activity' && !document.story_code
+      && Number.isInteger(document.sequence_index) ? [`第 ${document.sequence_index} 篇`] : []
+  return [...memoryPrefix, ...identity, document.part_label, ...sequenceSuffix,
     ...(variation ? [`分支${Number(variation[1])}`] : [])]
     .map((item) => String(item || '').trim()).filter(Boolean).join(' · ')
-    || String(document.display_title || '')
+    || displayTitle
 }
 
 /** 行完整性规则：sha256(全部行文本以 \n 连接) === local_integrity.sha256。 */
@@ -527,7 +562,7 @@ export class CorpusStore {
         return this.getDocument(preferred.document.document_id)
       }
       throw Object.assign(new Error(
-        `标题“${normalized}”对应 ${documentIds.length} 篇资料；请使用 corpus_search 返回的“活动 · 章节代码 · 篇名 · 行动前后”完整标题`,
+        `标题“${normalized}”对应 ${documentIds.length} 篇资料；请使用 corpus_search 返回的带资料类型完整标题`,
       ), { code: 'DOCUMENT_AMBIGUOUS' })
     }
     return documentIds.length ? this.getDocument(documentIds[0]) : null

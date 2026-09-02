@@ -100,10 +100,10 @@ test('corpus_read：display_title 定位（title+line 表面）', async () => {
   assert.equal(noCenter.error.code, 'LINE_RANGE_INVALID')
 })
 
-test('corpus_read：实体资料使用类型后缀消歧，角色 Wiki 保留自然标题', async () => {
+test('corpus_read：实体资料与角色 Wiki 都使用类型化自然标题', async () => {
   const store = new CorpusStore({ releasesDir })
   const wikiByTitle = await executeRead(store, {
-    intent_id: 'wiki-natural-title', locator: { display_title: '凯尔希' },
+    intent_id: 'wiki-natural-title', locator: { display_title: '凯尔希 / 角色 Wiki' },
     selection: { mode: 'section', section: '相关活动' },
   }, makeRuntime())
   assert.equal(wikiByTitle.status, 'ok')
@@ -161,7 +161,7 @@ test('corpus_read：section 模式只读取 Wiki 标签内部正文', async () =
   assert.ok(response.content.lines.every((line) => !/<\/?相关活动>/u.test(line.text)))
   assert.match(renderRead({}, response)[0].text, /字段：相关活动/u)
   assert.match(renderRead({}, response)[0].text, /引文状态：Wiki 为整理性资料/u)
-  assert.match(renderRead({}, response)[0].text, /引用：《凯尔希》Wiki·相关活动/u)
+  assert.match(renderRead({}, response)[0].text, /引用：《凯尔希 \/ 角色 Wiki》Wiki·相关活动/u)
 
   const invalid = await executeRead(store, { intent_id: 'wiki-section-invalid',
     locator: { document_id: AMIYA_DOC }, selection: { mode: 'section', section: '相关活动' } },

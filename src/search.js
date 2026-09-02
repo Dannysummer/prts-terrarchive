@@ -107,13 +107,24 @@ function normalizedRequest(raw = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw Object.assign(new Error('搜索参数必须是对象'), { code: 'INVALID_REQUEST' })
   }
-  const keys = Object.keys(raw)
   if (raw.cursor != null) {
-    if (keys.some((key) => key !== 'cursor')) {
-      throw Object.assign(new Error('cursor 必须单独提交，不能同时提供其他搜索参数'), { code: 'INVALID_REQUEST' })
-    }
     if (!normalizeText(raw.cursor)) throw Object.assign(new Error('cursor 不能为空'), { code: 'INVALID_REQUEST' })
     return { cursor: String(raw.cursor) }
+  }
+  let after = null
+  if (raw.after != null) {
+    if (!raw.after || typeof raw.after !== 'object' || Array.isArray(raw.after)) {
+      throw Object.assign(new Error('after 必须包含 resource_type、title 和 position'), { code: 'INVALID_REQUEST' })
+    }
+    const resourceType = normalizeText(raw.after.resource_type)
+    const title = normalizeText(raw.after.title)
+    const position = raw.after.position
+    if (!resourceType || !title || !Number.isInteger(position) || position < 0
+        || Object.keys(raw.after).some((key) => !['resource_type', 'title', 'position'].includes(key))) {
+      throw Object.assign(new Error('after 必须包含且只能包含 resource_type、title 和非负整数 position'),
+        { code: 'INVALID_REQUEST' })
+    }
+    after = { resource_type: resourceType, title, position }
   }
   const query = normalizeText(raw.query)
   if ([...query].length > 512) throw Object.assign(new Error('literal query 最多 512 个字符'),
@@ -163,7 +174,44 @@ function normalizedRequest(raw = {}) {
   return {
     query, filters, match_mode: matchMode,
     context_terms: [...new Set(contextTerms.map(normalizeText))],
+    after,
   }
+}
+
+function withoutAfter(request) {
+  const { after: _after, ...searchRequest } = request
+  return searchRequest
+}
+
+function checkpointAfterTitle(store, after) {
+  const documentId = store.documentOrder?.[after.position]
+  const location = documentId ? store.documents.get(documentId) : null
+  if (!location) throw Object.assign(new Error(`找不到分页锚点“${after.title}”`),
+    { code: 'PAGE_ANCHOR_NOT_FOUND' })
+  if (publicResourceType(location.document) !== after.resource_type
+      || naturalDocumentTitle(location.document) !== after.title) {
+    throw Object.assign(new Error('分页锚点与当前资料版本不匹配，请重新搜索'),
+      { code: 'PAGE_ANCHOR_MISMATCH' })
+  }
+  return { nextDocumentOrdinal: after.position + 1, matchedDocumentsSoFar: 0,
+    matchedCountKnown: false }
+}
+
+async function exposeTitleContinuation(store, result) {
+  if (result?.error || !result?.page) return result
+  const { next_cursor: internalCursor, ...page } = result.page
+  let nextAfter = null
+  if (internalCursor) {
+    const decoded = await decodeCursor(store, internalCursor)
+    const anchorOrdinal = decoded.nextDocumentOrdinal - 1
+    const documentId = store.documentOrder?.[anchorOrdinal]
+    const document = documentId ? store.documents.get(documentId)?.document : null
+    if (!document) throw Object.assign(new Error('无法生成下一页的标题锚点'),
+      { code: 'PAGE_ANCHOR_INVALID' })
+    nextAfter = { resource_type: publicResourceType(document), title: naturalDocumentTitle(document),
+      position: anchorOrdinal }
+  }
+  return { ...result, page: { ...page, next_after: nextAfter } }
 }
 
 function cursorVersionTag(dataVersion) {
@@ -1133,6 +1181,7 @@ async function executeScanSearch(store, request, checkpoint, { signal, requestId
       nextDocumentOrdinal = ordinal + 1
     }
     const exhausted = !stopped
+    const countKnown = checkpoint.matchedCountKnown !== false
     if (!exhausted) reasons.add('scan_incomplete')
     const nextCursor = exhausted ? null
       : await encodeScanCursor(store, request, nextDocumentOrdinal, matchedDocuments)
@@ -1141,8 +1190,8 @@ async function executeScanSearch(store, request, checkpoint, { signal, requestId
       documents,
       page: {
         returned_documents: documents.length,
-        ...(exhausted ? { total_documents: matchedDocuments } : {}),
-        total_relation: exhausted ? 'eq' : 'unknown',
+        ...(exhausted && countKnown ? { total_documents: matchedDocuments } : {}),
+        total_relation: exhausted && countKnown ? 'eq' : 'unknown',
         has_more: !exhausted,
         exhausted,
         next_cursor: nextCursor,
@@ -1165,15 +1214,20 @@ export async function executeSearch(store, raw, { signal, requestId = null } = {
     if (normalized.cursor) {
       const decoded = await decodeCursor(store, normalized.cursor)
       if (decoded.kind === 'legacy') {
-        return executeLegacySearch(store, decoded.request, decoded.offset, { signal, requestId })
+        return exposeTitleContinuation(store, await executeLegacySearch(store, decoded.request,
+          decoded.offset, { signal, requestId }))
       }
-      return executeScanSearch(store, decoded.request, {
+      return exposeTitleContinuation(store, await executeScanSearch(store, decoded.request, {
         nextDocumentOrdinal: decoded.nextDocumentOrdinal,
         matchedDocumentsSoFar: decoded.matchedDocumentsSoFar,
-      }, { signal, requestId })
+        matchedCountKnown: true,
+      }, { signal, requestId }))
     }
-    return executeScanSearch(store, normalized,
-      { nextDocumentOrdinal: 0, matchedDocumentsSoFar: 0 }, { signal, requestId })
+    const request = withoutAfter(normalized)
+    const checkpoint = normalized.after ? checkpointAfterTitle(store, normalized.after)
+      : { nextDocumentOrdinal: 0, matchedDocumentsSoFar: 0, matchedCountKnown: true }
+    return exposeTitleContinuation(store, await executeScanSearch(store, request, checkpoint,
+      { signal, requestId }))
   } catch (error) {
     return { contract_version: SEARCH_CONTRACT_VERSION, status: 'error',
       request_id: String(requestId || ''), data_version: store.dataVersion ?? null,

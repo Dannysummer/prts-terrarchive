@@ -64,7 +64,7 @@ const SEARCH_DESCRIPTION = [
   '像 grep 一样搜索 PRTS.chat 本地语料；命中立即返回原行及上下各一行，并按文档归并。',
   'query 使用短实体名、篇章展示名或原句片段；也可省略 query，仅按过滤条件列出资料入口。',
   '角色个人页用 character_wiki；活动/密录整理页用 story_wiki；角色在单个活动中的辅助整理用 character_activity_wiki。wiki_sections 可精确限定相关活动、相关角色、剧情总结、角色剧情概括等标签字段。',
-  'literal 是默认连续字面匹配；只有特殊模式才使用受限 regex。结果预算固定，沿 cursor 可确定性扫描到 exhausted=true；下一页只原样提交 cursor。',
+  'literal 是默认连续字面匹配；只有特殊模式才使用受限 regex。下一页保留原搜索条件，并把返回的 next_after 原样放入 after；锚点由资料类型与自然标题组成，不再暴露内部 cursor。',
 ].join(' ')
 
 const TIMELINE_DESCRIPTION = [
@@ -108,7 +108,13 @@ const SEARCH_PARAMETERS = {
       description: '默认 literal 连续字面匹配；除非必须，不使用受限 regex' },
     context_terms: { type: 'array', items: { type: 'string' },
       description: '要求命中附近同时出现的语境词（最多 8 个）' },
-    cursor: { type: 'string', description: '下一页原样复制上次返回的 next_cursor；必须单独提交' },
+    after: { type: 'object', additionalProperties: false,
+      description: '下一页锚点；与原 query 和过滤条件一起提交上次返回的 next_after',
+      required: ['resource_type', 'title', 'position'], properties: {
+        resource_type: { type: 'string', enum: RESOURCE_TYPES },
+        title: { type: 'string', description: '上一页扫描到的资料自然标题' },
+        position: { type: 'integer', description: '该标题在当前资料版本中的顺序位置' },
+      } },
   },
 }
 
@@ -151,12 +157,16 @@ const SEARCH_OUTPUT_SCHEMA = {
             citation: { type: 'string' } } },
       } } },
     page: { type: 'object', additionalProperties: false,
-      required: ['returned_documents', 'total_relation', 'has_more', 'exhausted', 'next_cursor'],
+      required: ['returned_documents', 'total_relation', 'has_more', 'exhausted', 'next_after'],
       properties: { returned_documents: { type: 'integer' }, total_documents: { type: 'integer' },
         total_relation: { type: 'string', enum: ['eq', 'unknown'] },
         has_more: { type: 'boolean' },
         exhausted: { type: 'boolean' },
-        next_cursor: { oneOf: [{ type: 'string' }, { type: 'null' }] } } },
+        next_after: { oneOf: [{ type: 'object', additionalProperties: false,
+          required: ['resource_type', 'title', 'position'], properties: {
+            resource_type: { type: 'string' }, title: { type: 'string' },
+            position: { type: 'integer' },
+          } }, { type: 'null' }] } } },
     truncated: { type: 'boolean' },
     truncation_reasons: { type: 'array', items: { type: 'string' } },
   },
