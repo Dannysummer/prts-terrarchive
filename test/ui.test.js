@@ -457,6 +457,10 @@ test('client bundle：ModuleLoader 工厂产出插件并注册皮肤设置与 PR
     '不能覆盖 body Portal 弹窗的 fixed 定位，否则添加工作区目录选择器会失效')
   assert.doesNotMatch(source, /prts-corpus-status/,
     '侧栏不再挂载重复且容易误报的资料状态卡')
+  assert.doesNotMatch(source, /grid-template-rows:20px 17px/,
+    '会话行不能强制改成两行 grid，否则运行状态会与标题重叠')
+  assert.match(source, />span:nth-child\(1\)>span:not\(\[data-state\]\).*clip-path:inset\(50%\)/s,
+    '会话状态的 screen-reader 文本必须保持视觉隐藏')
   let entry = null
   const window = { __ModuleLoader__: { load: (value) => { entry = value } } }
   vm.runInNewContext(source, { window, console })
