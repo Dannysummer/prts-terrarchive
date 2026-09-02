@@ -130,6 +130,8 @@ test('ui API：releases / activate / delete / config / status', async () => {
     assert.equal(status.status, 200)
     assert.equal(status.json.store.releaseId, 'rel-a')
     assert.equal(status.json.store.documentCount, 1)
+    assert.equal(status.json.store.installed, true)
+    assert.equal(status.json.store.installationIssue, null)
     assert.equal(status.json.config.hasCloudToken, false)
 
     // 激活 rel-b → store 热重载到新版本
@@ -312,6 +314,8 @@ test('applyUi：挂载 Connection 认证 RPC 通道 + 结果/错误映射', asyn
     const ok = await handler('status', {}, new AbortController().signal)
     assert.equal(ok.ok, true)
     assert.equal(ok.value.store.loaded, false)
+    assert.equal(ok.value.store.installed, false)
+    assert.match(ok.value.store.installationIssue, /未找到本地语料/u)
 
     const saved = await handler('config.update', { patch: { cloudEnabled: true } })
     assert.equal(saved.ok, true)

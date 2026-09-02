@@ -433,9 +433,10 @@ export async function apply(ctx, config = {}) {
   const enableTools = config.registerTools !== false
   const configuredHome = process.env.DSH_HOME?.trim()
   const dshHome = resolve(configuredHome || join(homedir(), '.dsh'))
+  const portableReleasesDir = process.env.PRTS_CORPUS_RELEASES_DIR?.trim()
   const releasesDir = config.releasesDir
     ? (isAbsolute(config.releasesDir) ? config.releasesDir : resolve(process.cwd(), config.releasesDir))
-    : join(dshHome, 'prts-corpus', 'releases')
+    : portableReleasesDir ? resolve(portableReleasesDir) : join(dshHome, 'prts-corpus', 'releases')
 
   // 共享状态：三层配置（默认 ← patch ← $DSH_HOME/prts-corpus.json），设置页可运行时改
   const configPath = join(dshHome, 'prts-corpus.json')
@@ -512,7 +513,9 @@ export async function apply(ctx, config = {}) {
         }
         if (!await installed()) return {
           status: 'blocked',
-          reason: '尚未安装资料。请前往“设置 → 插件 → PRTS 语料 → 版本管理”下载。',
+          reason: process.env.PRTS_PORTABLE === '1'
+            ? '发行版语料缺失或配置无效。请确认 ZIP 已完整解压；也可前往“设置 → 插件 → PRTS 语料 → 版本管理”重新下载。'
+            : '尚未安装资料或资料目录配置无效。请前往“设置 → 插件 → PRTS 语料 → 版本管理”下载并检查配置。',
         }
         if (!preparing) {
           preparing = store.ready()

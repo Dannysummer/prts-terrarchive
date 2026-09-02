@@ -357,9 +357,26 @@ export function buildApi(shared, env = {}) {
       const store = shared.store
       const ready = Boolean(store?.loaded)
       const config = shared.effective()
-      let storeInfo = { loaded: ready, releaseId: null, dataVersion: null, documentCount: null, packCount: null }
+      let installed = false
+      let installationIssue = null
+      try {
+        const pointer = JSON.parse(await readFile(join(shared.releasesDir, 'current.json'), 'utf8'))
+        const releaseId = String(pointer.release_id || '')
+        const manifest = JSON.parse(await readFile(
+          join(shared.releasesDir, releaseId, 'release-manifest.json'), 'utf8'))
+        installed = Boolean(releaseId && manifest.release_id === releaseId
+          && /^[0-9a-f]{64}$/u.test(String(manifest.data_version || '')))
+        if (!installed) installationIssue = 'current.json 或 release-manifest.json 内容无效'
+      } catch (error) {
+        installationIssue = error?.code === 'ENOENT'
+          ? '未找到本地语料；请下载资料或检查资料目录配置'
+          : `无法读取本地语料配置：${error?.message ?? error}`
+      }
+      let storeInfo = { loaded: ready, installed, installationIssue,
+        releaseId: null, dataVersion: null, documentCount: null, packCount: null }
       if (store && ready && store.releaseId) {
-        storeInfo = { loaded: true, releaseId: store.releaseId, dataVersion: store.dataVersion,
+        storeInfo = { ...storeInfo, loaded: true, installed: true, installationIssue: null,
+          releaseId: store.releaseId, dataVersion: store.dataVersion,
           documentCount: store.documents.size, packCount: store.packs.size }
       }
       return { status: 200, json: { store: storeInfo, download: { ...shared.download }, config: redactConfig(config) } }
