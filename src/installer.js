@@ -30,8 +30,24 @@ export const MODELSCOPE_REPOS = Object.freeze({
   community: 'HTiantian/prts-agent-corpus-selfbuilt',
 })
 
+/**
+ * ModelScope 按资料所有权分仓。只更新终末地时，未变化的明日方舟与共享包
+ * 不复制到新 release 目录，而是继续引用其最后一次已发布清单。组合关系
+ * 必须显式固定，不能按“各仓最新”猜测，否则并发发布时会拼出未经审核的版本。
+ */
+export const MODELSCOPE_RELEASE_COMPOSITIONS = Object.freeze({
+  'agent-corpus-v2-20260903-xuesong-youmeng-v1': Object.freeze({
+    dataVersion: '77df7c534525256af1dd36b68128cdd878ac2f3bc109636c5051fa85dd3dae09',
+    releases: Object.freeze({
+      official: 'agent-corpus-v1-20260826-timeline-v1',
+      endfield: 'agent-corpus-v2-20260903-xuesong-youmeng-v1',
+      community: 'agent-corpus-v1-20260826-timeline-v1',
+    }),
+  }),
+})
+
 /** 默认 pin 的 release（站点已发布；ModelScope 未就绪时自动回退站点源）。 */
-export const DEFAULT_RELEASE_ID = 'agent-corpus-v1-20260826-timeline-v1'
+export const DEFAULT_RELEASE_ID = 'agent-corpus-v2-20260903-xuesong-youmeng-v1'
 
 export const DEFAULT_SITE_BASE_URL = 'https://prts.chat'
 
@@ -361,6 +377,8 @@ export async function resolveModelScopeCurrentRelease(env = {}) {
   }
   const latest = [...ids].sort().at(-1)
   if (!latest) return null
+  const composition = MODELSCOPE_RELEASE_COMPOSITIONS[latest]
+  if (composition) return { releaseId: latest, dataVersion: composition.dataVersion }
   let dataVersion = null
   try {
     const manifest = await fetchJson(
@@ -374,20 +392,22 @@ export async function resolveModelScopeCurrentRelease(env = {}) {
 
 async function listFromModelScope(releaseId, env) {
   const plans = []
-  let dataVersion = null
+  const composition = MODELSCOPE_RELEASE_COMPOSITIONS[releaseId]
+  let dataVersion = composition?.dataVersion ?? null
   for (const group of ['official', 'endfield', 'community']) {
     const repo = MODELSCOPE_REPOS[group]
+    const sourceReleaseId = composition?.releases?.[group] ?? releaseId
     let manifest
     try {
       manifest = await fetchJson(
-        `https://modelscope.cn/datasets/${repo}/resolve/master/releases/${releaseId}/dataset-manifest.json`, env)
+        `https://modelscope.cn/datasets/${repo}/resolve/master/releases/${sourceReleaseId}/dataset-manifest.json`, env)
     } catch (error) {
       // 新增终末地分仓前发布的历史 release 只有两个镜像；继续允许安装。
       if (group === 'endfield' && error?.code === 'RELEASE_NOT_FOUND') continue
       throw error
     }
     if (manifest?.kind !== 'prts-agent-modelscope-dataset-mirror' || manifest?.schema_version !== 1
-      || String(manifest?.release_id ?? '') !== releaseId) {
+      || String(manifest?.release_id ?? '') !== sourceReleaseId) {
       throw new InstallerFault('INVALID_MANIFEST', `${repo} 的 dataset-manifest 与 release 不匹配`)
     }
     const version = String(manifest?.data_version ?? '')
@@ -395,14 +415,15 @@ async function listFromModelScope(releaseId, env) {
       throw new InstallerFault('INVALID_MANIFEST', `${repo} 的 dataset-manifest data_version 非法`)
     }
     if (dataVersion === null) dataVersion = version
-    else if (dataVersion !== version) {
+    else if (!composition && dataVersion !== version) {
       throw new InstallerFault('INVALID_MANIFEST', 'ModelScope 分仓的 dataset-manifest data_version 不一致')
     }
     const files = manifest?.files
     if (!files || typeof files !== 'object' || Array.isArray(files)) {
       throw new InstallerFault('INVALID_MANIFEST', `${repo} 的 dataset-manifest 缺少 files`)
     }
-    const keyPattern = MODELSCOPE_FILE_PATTERN(releaseId)
+    const keyPattern = MODELSCOPE_FILE_PATTERN(sourceReleaseId)
+    const sourcePrefix = `releases/${sourceReleaseId}/`
     for (const [key, descriptor] of Object.entries(files)) {
       if (!keyPattern.test(key)) {
         throw new InstallerFault('INVALID_MANIFEST', `文件清单包含非法路径: ${key}`)
@@ -413,7 +434,7 @@ async function listFromModelScope(releaseId, env) {
         throw new InstallerFault('INVALID_MANIFEST', `文件描述非法: ${key}`)
       }
       plans.push({
-        relativePath: key.slice(`releases/${releaseId}/`.length),
+        relativePath: key.slice(sourcePrefix.length),
         sha256, size,
         url: `https://modelscope.cn/datasets/${repo}/resolve/master/${key}`,
       })

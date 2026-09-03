@@ -10,7 +10,12 @@ import { gzipSync } from 'node:zlib'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ensureCorpusRelease, InstallerFault, resolveModelScopeCurrentRelease } from '../src/installer.js'
+import {
+  ensureCorpusRelease,
+  InstallerFault,
+  MODELSCOPE_RELEASE_COMPOSITIONS,
+  resolveModelScopeCurrentRelease,
+} from '../src/installer.js'
 import { CorpusStore, computeLinesIntegrity } from '../src/store.js'
 
 const RELEASE_ID = 'test-rel-1'
@@ -164,6 +169,27 @@ test('resolveModelScopeCurrentRelease：tree API 列举 + dataset-manifest 解�
     fetchImpl: async () => new Response('not found', { status: 404 }),
   })
   assert.equal(none, null)
+})
+
+test('分仓错峰发布：联合版本使用显式组合，不从各仓最新版本猜测', async () => {
+  const releaseId = 'agent-corpus-v2-20260903-xuesong-youmeng-v1'
+  const composition = MODELSCOPE_RELEASE_COMPOSITIONS[releaseId]
+  assert.equal(composition.releases.official, 'agent-corpus-v1-20260826-timeline-v1')
+  assert.equal(composition.releases.endfield, releaseId)
+  assert.equal(composition.releases.community, 'agent-corpus-v1-20260826-timeline-v1')
+
+  let manifestRequests = 0
+  const resolved = await resolveModelScopeCurrentRelease({
+    fetchImpl: async (url) => {
+      if (String(url).includes('/repo/tree')) return new Response(JSON.stringify({ Data: { Files: [
+        { Type: 'tree', Path: `releases/${releaseId}` },
+      ] } }), { status: 200 })
+      manifestRequests += 1
+      return new Response('not found', { status: 404 })
+    },
+  })
+  assert.deepEqual(resolved, { releaseId, dataVersion: composition.dataVersion })
+  assert.equal(manifestRequests, 0, '组合版本的数据版本必须来自已审核映射')
 })
 
 test('ModelScope 命中：优先源成功，完全不碰站点', async () => {
