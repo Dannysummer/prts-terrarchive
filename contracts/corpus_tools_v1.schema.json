@@ -59,10 +59,10 @@
           "default": "literal"
         },
         "resource_types": {
-          "description": "资料类型过滤（数组内 OR）。story=故事原文；character_profile=档案/招聘/潜能；character_module=模组；character_voice=语音；character_skin=时装；operator_record=干员密录；character_bundle=角色的档案+模组+语音+密录；character_wiki=规范角色 Wiki；story_wiki=活动/密录 Wiki；character_activity_wiki=角色×活动辅助 Wiki；reviewed_wiki=全部自建 Wiki；terra_journey=大地巡旅；entity_profile=实体资料；reference=时间线等引用资料。",
+          "description": "资料类型过滤（数组内 OR）。original_story=两款游戏的官方剧情原文；archive=终末地官方档案库；character_profile/character_voice=官方角色档案与语音；character_bundle=角色官方资料合集；character_wiki/story_wiki/knowledge=审校整理资料；其余旧类型保持兼容。",
           "type": "array",
           "minItems": 1,
-          "maxItems": 14,
+          "maxItems": 20,
           "uniqueItems": true,
           "items": {
             "type": "string",
@@ -80,7 +80,13 @@
               "reviewed_wiki",
               "terra_journey",
               "entity_profile",
-              "reference"
+              "reference",
+              "original_story",
+              "archive",
+              "knowledge",
+              "wiki",
+              "character_story",
+              "timeline"
             ]
           }
         },

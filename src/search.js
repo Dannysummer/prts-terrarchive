@@ -2,7 +2,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { deflateRawSync, inflateRawSync } from 'node:zlib'
 import { activityMatches, aliasesFor } from './timeline.js'
-import { DOCUMENT_ORDERING_VERSION, naturalDocumentTitle } from './store.js'
+import { DOCUMENT_ORDERING_VERSION, documentGame, naturalDocumentTitle } from './store.js'
 import { projectSearch } from './search-projection.js'
 import { wikiActivityName, wikiCharacterName, wikiDocumentRole,
   wikiSectionAt, wikiSectionRanges } from './wiki.js'
@@ -48,7 +48,8 @@ const FILTER_FIELDS = {
 }
 const CURSOR_FILTER_KEYS = Object.freeze({
   resource_types: 'r', character_names: 'c', story_names: 's', activity_names: 'a',
-  entity_names: 'e', speakers: 'p', wiki_sections: 'w',
+  entity_names: 'e', speakers: 'p', wiki_sections: 'w', games: 'g',
+  content_types: 't', collection_names: 'n',
 })
 
 function normalizeText(value) {
@@ -64,10 +65,33 @@ function trigramsFor(value) {
 
 function resourceMatches(document, requested) {
   if (!requested.length) return true
+  const explicit = String(document.resource_type || '')
   const type = String(document.document_type || '')
   const kind = String(document.document_kind || '')
   const category = String(document.document_category || '')
   return requested.some((resource) => {
+    // v2 documents carry a narrow resource_type, but callers may deliberately
+    // request a semantic union.  Exact-match short-circuiting here used to make
+    // character_bundle/reviewed_wiki/wiki silently exclude every Endfield v2
+    // document.
+    if (resource === explicit) return true
+    if (resource === 'story' && explicit === 'original_story') return true
+    if (resource === 'character_bundle'
+        && ['character_profile', 'character_module', 'character_voice',
+          'operator_record'].includes(explicit)) return true
+    if (resource === 'reviewed_wiki'
+        && ['character_wiki', 'story_wiki', 'character_activity_wiki',
+          'knowledge'].includes(explicit)) return true
+    if (resource === 'wiki'
+        && ['character_wiki', 'story_wiki', 'character_activity_wiki',
+          'knowledge'].includes(explicit)) return true
+    // v2 common vocabulary over legacy Arknights v1 metadata.
+    if (resource === 'original_story') return type === 'story' && category !== 'memory' && kind !== 'synopsis'
+    if (resource === 'character_story') return type === 'story' && category === 'memory'
+    if (resource === 'archive') return type === 'knowledge' && kind === 'official_archive'
+    if (resource === 'knowledge') return type === 'knowledge' && kind === 'wiki'
+    if (resource === 'wiki') return type === 'knowledge' && kind === 'wiki'
+    if (resource === 'timeline') return type === 'reference'
     if (resource === 'story') return type === 'story' && category !== 'memory' && kind !== 'synopsis'
     if (resource === 'operator_record') return type === 'story' && category === 'memory'
     if (resource === 'character_profile') return type === 'character' && PROFILE_CATEGORIES.has(category)
@@ -131,7 +155,7 @@ function normalizedRequest(raw = {}) {
     { code: 'INVALID_REQUEST' })
   const filters = {}
   for (const field of ['resource_types', 'character_names', 'story_names', 'activity_names',
-    'entity_names', 'speakers', 'wiki_sections']) {
+    'entity_names', 'speakers', 'wiki_sections', 'games', 'content_types', 'collection_names']) {
     if (raw[field] !== undefined && (!Array.isArray(raw[field]) || !raw[field].length)) {
       throw Object.assign(new Error(`${field} 必须是非空数组`), { code: 'INVALID_REQUEST' })
     }
@@ -148,6 +172,10 @@ function normalizedRequest(raw = {}) {
       throw Object.assign(new Error(`${field} 单项最长 ${FILTER_ITEM_LIMIT} 个字符`), { code: 'INVALID_REQUEST' })
     }
   }
+  if (filters.games.some((value) => !['arknights', 'endfield'].includes(value.toLocaleLowerCase()))) {
+    throw Object.assign(new Error('games 仅支持 arknights / endfield'), { code: 'INVALID_REQUEST' })
+  }
+  filters.games = filters.games.map((value) => value.toLocaleLowerCase())
   if (!query && !Object.values(filters).some((items) => items.length)) {
     throw Object.assign(new Error('请提供 query 或至少一个资料/人物/篇章/说话人过滤条件'), { code: 'INVALID_REQUEST' })
   }
@@ -183,17 +211,22 @@ function withoutAfter(request) {
   return searchRequest
 }
 
-function checkpointAfterTitle(store, after) {
-  const documentId = store.documentOrder?.[after.position]
+async function checkpointAfterTitle(store, after, request) {
+  const regex = request.match_mode === 'regex'
+    ? new RegExp(safeRegex(request.query).source, 'iu') : null
+  const candidates = await candidateDocumentIds(store, request, regex)
+  const documentId = candidates[after.position]
   const location = documentId ? store.documents.get(documentId) : null
   if (!location) throw Object.assign(new Error(`找不到分页锚点“${after.title}”`),
     { code: 'PAGE_ANCHOR_NOT_FOUND' })
   if (publicResourceType(location.document) !== after.resource_type
-      || naturalDocumentTitle(location.document) !== after.title) {
-    throw Object.assign(new Error('分页锚点与当前资料版本不匹配，请重新搜索'),
+      || normalizeText(naturalDocumentTitle(location.document)) !== normalizeText(after.title)) {
+    throw Object.assign(new Error(
+      `分页锚点与当前资料版本不匹配：收到“${after.title}”，当前位置为“${naturalDocumentTitle(location.document)}”；请重新搜索`,
+    ),
       { code: 'PAGE_ANCHOR_MISMATCH' })
   }
-  return { nextDocumentOrdinal: after.position + 1, matchedDocumentsSoFar: 0,
+  return { nextCandidateIndex: after.position + 1, matchedDocumentsSoFar: 0,
     matchedCountKnown: false }
 }
 
@@ -203,8 +236,11 @@ async function exposeTitleContinuation(store, result) {
   let nextAfter = null
   if (internalCursor) {
     const decoded = await decodeCursor(store, internalCursor)
-    const anchorOrdinal = decoded.nextDocumentOrdinal - 1
-    const documentId = store.documentOrder?.[anchorOrdinal]
+    const regex = decoded.request.match_mode === 'regex'
+      ? new RegExp(safeRegex(decoded.request.query).source, 'iu') : null
+    const candidates = await candidateDocumentIds(store, decoded.request, regex)
+    const anchorOrdinal = decoded.nextCandidateIndex - 1
+    const documentId = candidates[anchorOrdinal]
     const document = documentId ? store.documents.get(documentId)?.document : null
     if (!document) throw Object.assign(new Error('无法生成下一页的标题锚点'),
       { code: 'PAGE_ANCHOR_INVALID' })
@@ -266,9 +302,9 @@ async function encodeOffsetCursor(store, request, offset) {
   return `${body}.${signature}`
 }
 
-async function encodeScanCursor(store, request, nextDocumentOrdinal, matchedDocumentsSoFar) {
+async function encodeScanCursor(store, request, nextCandidateIndex, matchedDocumentsSoFar) {
   const payload = [4, cursorVersionTag(store.dataVersion), DOCUMENT_ORDERING_VERSION,
-    SEARCH_POLICY_FINGERPRINT, nextDocumentOrdinal, matchedDocumentsSoFar,
+    SEARCH_POLICY_FINGERPRINT, nextCandidateIndex, matchedDocumentsSoFar,
     compactCursorRequest(request)]
   const compressed = deflateRawSync(Buffer.from(JSON.stringify(payload)), { level: 9 })
   const encoded = compressed.toString('base64url')
@@ -310,7 +346,7 @@ async function decodeCursor(store, cursor) {
       throw Object.assign(new Error('cursor 绑定的排序或搜索策略已经变化，请重新搜索'),
         { code: 'CURSOR_POLICY_MISMATCH' })
     }
-    return { kind: 'scan', request, nextDocumentOrdinal: value[4],
+    return { kind: 'scan', request, nextCandidateIndex: value[4],
       matchedDocumentsSoFar: value[5] }
   }
   if (parts.length === 3 && parts[0] === 's3') {
@@ -356,7 +392,12 @@ async function decodeCursor(store, cursor) {
 }
 
 function documentMatches(document, speakers, filters) {
+  if (filters.games?.length && !filters.games.includes(documentGame(document))) return false
   if (!resourceMatches(document, filters.resource_types)) return false
+  if (filters.content_types?.length
+      && !filters.content_types.includes(publicContentType(document))) return false
+  if (filters.collection_names?.length
+      && !filters.collection_names.includes(publicCollectionName(document))) return false
   for (const [filter, field] of Object.entries(FILTER_FIELDS)) {
     if (filters[filter].length && !filters[filter].includes(normalizeText(document[field]))) return false
   }
@@ -539,8 +580,16 @@ function clusterPassages(candidates, forcedTruncated = false) {
 
 function searchableTitleText(document) {
   return [document.display_title, document.story_name, document.activity_name,
-    document.character_name, document.story_code, document.part_label]
+    document.character_name, document.story_code, document.part_label,
+    document.collection_name, document.mission_title, document.story_key]
     .map((item) => normalizeText(item)).filter(Boolean).join('\n')
+}
+
+function isExactOfficialArchiveTitle(document, request) {
+  if (!request.query || publicResourceType(document) !== 'archive') return false
+  const query = normalizeText(request.query).toLocaleLowerCase()
+  return [document.display_title, document.story_name]
+    .some((value) => normalizeText(value).toLocaleLowerCase() === query)
 }
 
 function lineAllowed(line, filters) {
@@ -558,6 +607,7 @@ function documentTitle(document) {
 }
 
 function publicResourceType(document) {
+  if (document.resource_type) return String(document.resource_type)
   const type = String(document.document_type || '')
   const kind = String(document.document_kind || '')
   const category = String(document.document_category || '')
@@ -576,6 +626,22 @@ function publicResourceType(document) {
   if (type === 'knowledge' && kind === 'terra_journey') return 'terra_journey'
   if (type === 'entity') return 'entity_profile'
   return 'reference'
+}
+
+function publicContentType(document) {
+  if (document.content_type) return normalizeText(document.content_type)
+  const kind = normalizeText(document.kind || document.document_kind).toLocaleLowerCase()
+  const mapping = {
+    dlg: 'dialogue', story: 'dialogue', cutscene: 'cutscene', radio: 'radio',
+    remotecomm: 'remote_comm', black: 'black_screen', env: 'environment_talk',
+    sns: 'sns_chat', topic: 'sns_topic', wiki: 'knowledge', reference: 'knowledge',
+  }
+  return mapping[kind] || (document.document_type === 'story' ? 'dialogue' : 'knowledge')
+}
+
+function publicCollectionName(document) {
+  return normalizeText(document.collection_name || document.mission_title
+    || document.activity_name || document.story_name)
 }
 
 function boundedSummaryText(value, maximum) {
@@ -609,8 +675,10 @@ function evidenceKind(document, field, occurrence) {
   if (field === 'catalog' || field === 'title') return 'catalog'
   if (occurrence?.evidence_kind === 'metadata_link') return 'entity_projection'
   if (resource.endsWith('_wiki')) return 'wiki_curated'
-  if (resource === 'story' || resource === 'operator_record') return 'official_canonical'
-  if (resource.startsWith('character_')) return 'official_structured'
+  if (resource === 'story' || resource === 'original_story' || resource === 'operator_record') {
+    return 'official_canonical'
+  }
+  if (resource === 'archive' || resource.startsWith('character_')) return 'official_structured'
   return 'wiki_curated'
 }
 
@@ -789,7 +857,9 @@ async function executeLegacySearch(store, request, offset, { signal, requestId =
       const metadata = group.record.document
       const title = naturalDocumentTitle(metadata)
       const result = {
-        title, resource_type: publicResourceType(metadata),
+        game: documentGame(metadata), title, resource_type: publicResourceType(metadata),
+        content_type: publicContentType(metadata),
+        ...(publicCollectionName(metadata) ? { collection_name: publicCollectionName(metadata) } : {}),
         ...(metadata.activity_name ? { activity_name: metadata.activity_name } : {}),
         ...(metadata.character_name ? { character_name: metadata.character_name } : {}),
         matches: [], matches_truncated: group.items.some((item) => item.document_passages_truncated),
@@ -895,15 +965,48 @@ async function candidateDocumentIds(store, request, regex) {
   const titleIds = request.query && !hasLineScope ? scopedIds
     .filter((id) => matchesText(searchableTitleText(store.documents.get(id).document),
       request.query, request.match_mode, regex)) : []
-  if (!request.query || regex || !store.hasTrigramIndex) return scopedIds
+  const prioritizeOfficialTitle = (ids) => {
+    const exact = ids.filter((id) => isExactOfficialArchiveTitle(
+      store.documents.get(id)?.document || {}, request))
+    if (!exact.length) return interleaveGameCandidates(store, ids, request)
+    const selected = new Set(exact)
+    return [...exact, ...interleaveGameCandidates(store, ids.filter((id) => !selected.has(id)), request)]
+  }
+  if (!request.query || regex || !store.hasTrigramIndex) return prioritizeOfficialTitle(scopedIds)
   const queryTrigrams = trigramsFor(request.query)
   // 1—2 字查询复用资料层的无损分片预筛。预筛不适用时返回 null，并回退
   // 稳定扫描；缓存只影响速度，候选最终始终恢复为全局 ordinal 顺序。
   const indexed = queryTrigrams.length
     ? await store.findDocumentsByTrigrams(queryTrigrams)
     : await store.findDocumentsByShortLiteral?.(request.query) ?? null
-  if (indexed === null) return scopedIds
-  return store.orderedDocumentIds([...new Set([...indexed.filter((id) => scoped.has(id)), ...titleIds])])
+  if (indexed === null) return prioritizeOfficialTitle(scopedIds)
+  return prioritizeOfficialTitle(
+    store.orderedDocumentIds([...new Set([...indexed.filter((id) => scoped.has(id)), ...titleIds])]))
+}
+
+function interleaveGameCandidates(store, documentIds, request) {
+  const requested = request.filters.games?.length
+    ? request.filters.games : ['arknights', 'endfield']
+  if (requested.length < 2) return documentIds
+  const queues = new Map(requested.map((game) => [game, []]))
+  const other = []
+  for (const documentId of documentIds) {
+    const game = documentGame(store.documents.get(documentId)?.document || {})
+    const queue = queues.get(game)
+    if (queue) queue.push(documentId)
+    else other.push(documentId)
+  }
+  const nonempty = [...queues.values()].filter((queue) => queue.length)
+  if (nonempty.length < 2) return documentIds
+  const result = []
+  const maximum = Math.max(...nonempty.map((queue) => queue.length))
+  for (let index = 0; index < maximum; index += 1) {
+    for (const game of requested) {
+      const documentId = queues.get(game)?.[index]
+      if (documentId) result.push(documentId)
+    }
+  }
+  return result.concat(other)
 }
 
 function collectDocumentGroup(record, request, regex, entityAliasGroups, deadline, signal = null) {
@@ -1047,7 +1150,9 @@ function buildPublicDocument(group, resultKind, request, budget = Infinity) {
   const metadata = group.record.document
   const title = naturalDocumentTitle(metadata)
   const result = {
-    title, resource_type: publicResourceType(metadata),
+    game: documentGame(metadata), title, resource_type: publicResourceType(metadata),
+    content_type: publicContentType(metadata),
+    ...(publicCollectionName(metadata) ? { collection_name: publicCollectionName(metadata) } : {}),
     ...(metadata.activity_name ? { activity_name: metadata.activity_name } : {}),
     ...(metadata.character_name ? { character_name: metadata.character_name } : {}),
     matches: [], matches_truncated: group.items.some((item) => item.document_passages_truncated),
@@ -1136,13 +1241,13 @@ async function executeScanSearch(store, request, checkpoint, { signal, requestId
     let characters = 0
     let scanned = 0
     let matchedDocuments = checkpoint.matchedDocumentsSoFar
-    let nextDocumentOrdinal = checkpoint.nextDocumentOrdinal
+    let nextCandidateIndex = checkpoint.nextCandidateIndex
     let stopped = false
-    for (const documentId of candidateIds) {
-      const ordinal = store.documentOrdinal(documentId)
-      if (ordinal == null || ordinal < checkpoint.nextDocumentOrdinal) continue
+    for (let candidateIndex = 0; candidateIndex < candidateIds.length; candidateIndex += 1) {
+      const documentId = candidateIds[candidateIndex]
+      if (candidateIndex < checkpoint.nextCandidateIndex) continue
       if (documents.length >= PAGE_DOCUMENTS || scanned >= SCAN_DOCUMENTS_PER_PAGE) {
-        nextDocumentOrdinal = ordinal
+        nextCandidateIndex = candidateIndex
         stopped = true
         break
       }
@@ -1151,23 +1256,23 @@ async function executeScanSearch(store, request, checkpoint, { signal, requestId
       scanned += 1
       if (!location || !documentMatches(location.document, location.speakers, request.filters)
           || store.isPreferredNaturalDocument?.(documentId) === false) {
-        nextDocumentOrdinal = ordinal + 1
+        nextCandidateIndex = candidateIndex + 1
         continue
       }
       const found = await store.getDocument(documentId)
       if (!found) {
-        nextDocumentOrdinal = ordinal + 1
+        nextCandidateIndex = candidateIndex + 1
         continue
       }
       const group = collectDocumentGroup(found.record, request, regex, entityAliasGroups, deadline, signal)
       if (!group) {
-        nextDocumentOrdinal = ordinal + 1
+        nextCandidateIndex = candidateIndex + 1
         continue
       }
       const remaining = Math.max(0, PREVIEW_OPTIONS.max_total_chars - characters)
       const measured = measureDocument(group, resultKind, request)
       if (documents.length && measured > remaining) {
-        nextDocumentOrdinal = ordinal
+        nextCandidateIndex = candidateIndex
         reasons.add('output_chars')
         stopped = true
         break
@@ -1178,13 +1283,13 @@ async function executeScanSearch(store, request, checkpoint, { signal, requestId
       characters += built.characters
       for (const reason of built.reasons) reasons.add(reason)
       matchedDocuments += 1
-      nextDocumentOrdinal = ordinal + 1
+      nextCandidateIndex = candidateIndex + 1
     }
     const exhausted = !stopped
     const countKnown = checkpoint.matchedCountKnown !== false
     if (!exhausted) reasons.add('scan_incomplete')
     const nextCursor = exhausted ? null
-      : await encodeScanCursor(store, request, nextDocumentOrdinal, matchedDocuments)
+      : await encodeScanCursor(store, request, nextCandidateIndex, matchedDocuments)
     return {
       result_kind: resultKind,
       documents,
@@ -1211,23 +1316,35 @@ export async function executeSearch(store, raw, { signal, requestId = null } = {
   try {
     await store.ready()
     const normalized = normalizedRequest(raw)
+    const attachCorpusWarnings = (value, request) => {
+      if (value?.status === 'error' || !(store.packs instanceof Map)) return value
+      const games = request.filters.games?.length
+        ? request.filters.games : ['arknights', 'endfield']
+      const packByGame = { arknights: 'official_game', endfield: 'endfield_official_game' }
+      const warnings = games.filter((game) => !store.packs.has(packByGame[game])).map((game) => ({
+        code: 'CORPUS_GAME_NOT_INSTALLED', game,
+        message: `${game === 'endfield' ? '终末地' : '明日方舟'}本地语料未安装，本次只检索其余已安装资料。`,
+      }))
+      return warnings.length ? { ...value, warnings } : value
+    }
     if (normalized.cursor) {
       const decoded = await decodeCursor(store, normalized.cursor)
       if (decoded.kind === 'legacy') {
-        return exposeTitleContinuation(store, await executeLegacySearch(store, decoded.request,
-          decoded.offset, { signal, requestId }))
+        return attachCorpusWarnings(await exposeTitleContinuation(store,
+          await executeLegacySearch(store, decoded.request, decoded.offset, { signal, requestId })),
+        decoded.request)
       }
-      return exposeTitleContinuation(store, await executeScanSearch(store, decoded.request, {
-        nextDocumentOrdinal: decoded.nextDocumentOrdinal,
+      return attachCorpusWarnings(await exposeTitleContinuation(store, await executeScanSearch(store, decoded.request, {
+        nextCandidateIndex: decoded.nextCandidateIndex,
         matchedDocumentsSoFar: decoded.matchedDocumentsSoFar,
         matchedCountKnown: true,
-      }, { signal, requestId }))
+      }, { signal, requestId })), decoded.request)
     }
     const request = withoutAfter(normalized)
-    const checkpoint = normalized.after ? checkpointAfterTitle(store, normalized.after)
-      : { nextDocumentOrdinal: 0, matchedDocumentsSoFar: 0, matchedCountKnown: true }
-    return exposeTitleContinuation(store, await executeScanSearch(store, request, checkpoint,
-      { signal, requestId }))
+    const checkpoint = normalized.after ? await checkpointAfterTitle(store, normalized.after, request)
+      : { nextCandidateIndex: 0, matchedDocumentsSoFar: 0, matchedCountKnown: true }
+    return attachCorpusWarnings(await exposeTitleContinuation(store,
+      await executeScanSearch(store, request, checkpoint, { signal, requestId })), request)
   } catch (error) {
     return { contract_version: SEARCH_CONTRACT_VERSION, status: 'error',
       request_id: String(requestId || ''), data_version: store.dataVersion ?? null,

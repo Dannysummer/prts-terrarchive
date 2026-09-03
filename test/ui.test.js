@@ -30,6 +30,7 @@ test('state：三层配置（默认 ← patch ← 用户文件）与写校验', 
     assert.equal(effective.cloudEnabled, true, 'patch cloud.baseUrl → cloudEnabled')
     assert.equal(effective.cloudBaseUrl, 'https://patch.example')
     assert.equal(effective.uiSkin, 'prts-agent')
+    assert.deepEqual(effective.enabledGames, ['arknights', 'endfield'])
     assert.equal(effective.hardIntentRecords, undefined, '旧 patch 预算配置已忽略')
 
     // 写用户层：合法补丁持久化并覆盖 base
@@ -43,6 +44,11 @@ test('state：三层配置（默认 ← patch ← 用户文件）与写校验', 
     assert.equal(effective.uiSkin, 'prts-agent')
     effective = await shared.saveConfig({ uiSkin: 'endfield-aic' })
     assert.equal(effective.uiSkin, 'endfield-aic')
+    effective = await shared.saveConfig({ enabledGames: ['endfield'] })
+    assert.deepEqual(effective.enabledGames, ['endfield'])
+    await assert.rejects(() => shared.saveConfig({ enabledGames: [] }), (e) => e.code === 'INVALID_CONFIG')
+    await assert.rejects(() => shared.saveConfig({ enabledGames: ['endfield', 'endfield'] }),
+      (e) => e.code === 'INVALID_CONFIG')
 
     // 新实例从文件恢复用户层
     const reloaded = createSharedState({ configPath, releasesDir: dir, patchConfig: {} })
@@ -91,13 +97,16 @@ async function makeRelease(releasesDir, releaseId, dataVersion, lineText) {
   const dir = join(releasesDir, releaseId, 'references')
   await mkdir(join(dir, 'shards'), { recursive: true })
   await writeFile(join(dir, 'pack-manifest.json'), JSON.stringify({
-    pack_id: 'references', data_version: dataVersion,
+    pack_id: 'references', game: 'arknights', data_version: dataVersion,
+    document_count: 1, compressed_size: shard.length,
     shards: [{ path: 'shards/00000.jsonl.gz', sha256: sha256(shard), compressed_size: shard.length }],
     search_index: { shards: [] },
   }))
   await writeFile(join(dir, 'shards', '00000.jsonl.gz'), shard)
   await writeFile(join(releasesDir, releaseId, 'release-manifest.json'), JSON.stringify({
     release_id: releaseId, data_version: dataVersion, document_count: 1, created_at: `2026-01-0${releaseId.length}T00:00:00Z`,
+    packs: [{ pack_id: 'references', manifest_path: 'references/pack-manifest.json',
+      document_count: 1, compressed_size: shard.length, data_version: dataVersion }],
   }))
 }
 
@@ -121,6 +130,9 @@ test('ui API：releases / activate / delete / config / status', async () => {
     assert.equal(active.active, true)
     assert.ok(active.sizeBytes > 0)
     assert.equal(active.documentCount, 1)
+    assert.equal(active.datasets.arknights.present, true)
+    assert.equal(active.datasets.arknights.documentCount, 1)
+    assert.equal(active.datasets.endfield.present, false)
 
     // 挂上真 store 验证 status 与激活热切换
     const store = new CorpusStore({ releasesDir })

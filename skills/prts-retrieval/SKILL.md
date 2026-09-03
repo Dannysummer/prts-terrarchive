@@ -39,6 +39,15 @@ description: 检索并回答明日方舟剧情、人物、设定、台词、Wiki
 - 只记得一句原文的大意时使用 `options.search_intent="single_sentence_search"`；普通问题让默认路由判断。
 - 返回末尾的“可读取原文”提供自然语言 `title + line`，供 `corpus_read` 定点核验。
 
+#### 原句、场景与正式资料的通用路由
+
+- 用户给出确定的原句、专名或正式资料标题：先用 `corpus_search` 的字面检索。正式标题命中优先打开对应的官方档案／角色资料，不要被普通正文中的同词提及带走。
+- 用户只记得一句话的大意，措辞可能不准：使用 `cloud_search`，设置 `options.search_intent="single_sentence_search"`。
+- 用户描述的是一段完整情节、人物互动、地点中的事件或过程：使用 `cloud_search`，设置 `options.search_intent="scene_search"`，再按返回的可读位置核验原文。
+- 用户询问概念、身份、关系或跨资料综合问题：使用默认 `cloud_search` 混合检索；需要逐字证据时再分别转入上述原句或场景路线。
+
+这套判断同时适用于《明日方舟》和《终末地》，不以数据规模、游戏名称或当前皮肤决定路由。
+
 ### `cloud_inspect`：检查云端检索过程
 
 - 定点查看最近一次云端检索的回答材料、入选来源或候选状态。

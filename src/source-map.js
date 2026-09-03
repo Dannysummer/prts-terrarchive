@@ -1,5 +1,5 @@
 /** 云端候选来源 → 本地资料包篇章/官方行号映射。 */
-import { documentUid, naturalDocumentTitle } from './store.js'
+import { documentGame, documentUid, naturalDocumentTitle } from './store.js'
 
 function normalizedStoryIdentifier(value) {
   let identifier = String(value || '').trim().replaceAll('\\', '/')
@@ -47,6 +47,7 @@ export function collectSourceHints(value, found = new Map()) {
       .find((item) => typeof item === 'string' && item.trim())
     const hint = {
       evidence_id: String(value.evidence_id || ''), candidate_id: String(value.candidate_id || ''),
+      game: String(value.game || ''),
       source_file: String(value.source_file || ''), source_id: String(value.source_id || ''),
       doc_id: String(value.doc_id || ''), document_id: String(value.document_id || ''),
       story_id: String(value.story_id || ''), source_story_id: String(value.source_story_id || ''),
@@ -208,6 +209,7 @@ export async function resolveCloudSources(store, hints, { signal } = {}) {
     const title = naturalDocumentTitle(document)
     const titleAmbiguous = (store.naturalTitleIndex.get(title) || []).length > 1
     mappings.push({
+      game: documentGame(document),
       document_id: String(document.document_id || ''),
       source_ref_prefix: String(document.source_ref_prefix || ''),
       document_uid: uid, title,

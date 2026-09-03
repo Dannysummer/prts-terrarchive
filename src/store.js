@@ -20,9 +20,9 @@ const gunzipAsync = promisify(gunzip)
 
 const TRIGRAM_MAGIC = Buffer.from([80, 82, 84, 83, 84, 71, 49, 0])
 const TRIGRAM_HEADER_BYTES = TRIGRAM_MAGIC.length + 4
-const PACK_ORDER = Object.freeze(['official_game', 'reviewed_wiki', 'terra_journey',
-  'entities', 'references'])
-export const DOCUMENT_ORDERING_VERSION = 1
+const PACK_ORDER = Object.freeze(['official_game', 'endfield_official_game', 'reviewed_wiki', 'terra_journey',
+  'endfield_reviewed_knowledge', 'entities', 'references'])
+export const DOCUMENT_ORDERING_VERSION = 2
 
 function packOrder(left, right) {
   const leftIndex = PACK_ORDER.indexOf(left.name)
@@ -30,6 +30,34 @@ function packOrder(left, right) {
   const leftRank = leftIndex < 0 ? PACK_ORDER.length : leftIndex
   const rightRank = rightIndex < 0 ? PACK_ORDER.length : rightIndex
   return leftRank - rightRank || left.name.localeCompare(right.name, 'en')
+}
+
+/**
+ * Keep each game's internal source order, but interleave their documents in
+ * the global scan order.  Literal search paginates by this ordinal; without
+ * interleaving, a frequent term can fill every scan page from the first pack
+ * before the second game's candidates are even visited.
+ */
+function federatedOrder(documents, sourceOrder) {
+  const byGame = new Map([['arknights', []], ['endfield', []]])
+  const other = []
+  for (const documentId of sourceOrder) {
+    const item = documents.get(documentId)
+    const game = item ? documentGame(item.document) : ''
+    const target = byGame.get(game)
+    if (target) target.push(documentId)
+    else other.push(documentId)
+  }
+  if (!byGame.get('arknights').length || !byGame.get('endfield').length) return sourceOrder
+  const ordered = []
+  const maximum = Math.max(byGame.get('arknights').length, byGame.get('endfield').length)
+  for (let index = 0; index < maximum; index += 1) {
+    for (const game of ['arknights', 'endfield']) {
+      const documentId = byGame.get(game)[index]
+      if (documentId) ordered.push(documentId)
+    }
+  }
+  return ordered.concat(other)
 }
 
 function readVarint(bytes, state, limit) {
@@ -96,8 +124,16 @@ export function documentUid(documentId) {
 }
 
 /** 模型/界面使用的自然语言资料定位；各资料类型都带上可辨认的标题与类型。 */
-export function naturalDocumentTitle(document = {}) {
+export function documentGame(document = {}) {
+  const explicit = String(document.game || '').trim().toLocaleLowerCase()
+  if (explicit === 'arknights' || explicit === 'endfield') return explicit
+  const identity = `${document.document_id || ''} ${document.source_ref_prefix || ''}`.toLocaleLowerCase()
+  return identity.includes('endfield:') ? 'endfield' : 'arknights'
+}
+
+function naturalDocumentTitleBase(document = {}) {
   const displayTitle = String(document.display_title || '').trim()
+  if (documentGame(document) === 'endfield' && document.game) return displayTitle
   if (document.document_type === 'entity') {
     return displayTitle ? `${displayTitle} / 实体资料` : ''
   }
@@ -144,6 +180,18 @@ export function naturalDocumentTitle(document = {}) {
     ...(variation ? [`分支${Number(variation[1])}`] : [])]
     .map((item) => String(item || '').trim()).filter(Boolean).join(' · ')
     || displayTitle
+}
+
+/**
+ * v2 联合语料使用带游戏前缀的自然标题消除跨游戏同名歧义。旧 v1
+ * 文档没有 game 字段，继续保留原题面；加载器同时为显式 game 文档建立
+ * 无前缀兼容索引，因此历史数据与新联合包可以并存。
+ */
+export function naturalDocumentTitle(document = {}) {
+  const title = naturalDocumentTitleBase(document)
+  if (!title || !document.game) return title
+  const label = documentGame(document) === 'endfield' ? '终末地' : '明日方舟'
+  return title.startsWith(`${label} · `) ? title : `${label} · ${title}`
 }
 
 /** 行完整性规则：sha256(全部行文本以 \n 连接) === local_integrity.sha256。 */
@@ -372,6 +420,14 @@ export class CorpusStore {
             const ids = next.naturalTitleIndex.get(naturalTitle) ?? []
             ids.push(documentId)
             next.naturalTitleIndex.set(naturalTitle, ids)
+            if (record.document.game) {
+              const legacyTitle = naturalDocumentTitleBase(record.document)
+              if (legacyTitle && legacyTitle !== naturalTitle) {
+                const legacyIds = next.naturalTitleIndex.get(legacyTitle) ?? []
+                legacyIds.push(documentId)
+                next.naturalTitleIndex.set(legacyTitle, legacyIds)
+              }
+            }
           }
           const path = record.document.path
           if (path && !next.pathIndex.has(path)) next.pathIndex.set(path, documentId)
@@ -391,6 +447,10 @@ export class CorpusStore {
     if (next.documents.size === 0) {
       throw new Error(`CorpusStore: no documents found under ${releaseDir}`)
     }
+    next.documentOrder = federatedOrder(next.documents, next.documentOrder)
+    next.documentOrder.forEach((documentId, ordinal) => {
+      next.documents.get(documentId).ordinal = ordinal
+    })
     if (generation !== this._generation) return false
     this.releaseId = next.releaseId
     this.dataVersion = next.dataVersion

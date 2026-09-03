@@ -172,6 +172,7 @@ test('search：注入 request_id；inspect 不持有跨调用请求状态', asyn
   await client.search({ query: '凯尔希的过去' })
   assert.match(seen.at(-1).body.request_id, /^req-/)
   assert.equal(seen.at(-1).body.query, '凯尔希的过去')
+  assert.deepEqual(seen.at(-1).body.games, ['arknights', 'endfield'])
 
   await client.inspect({ section: 'candidates' })
   assert.equal(seen.at(-1).body.request_id, undefined, 'request_id 应由插件的 Agent 证据状态注入')

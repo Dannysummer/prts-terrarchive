@@ -140,7 +140,36 @@ export function createEntityRecognizer(store) {
       if (signal?.aborted) throw cancelledError()
       const matches = automaton.match(text)
       if (signal?.aborted) throw cancelledError()
-      return { matches, entities: [...new Set(matches.map((item) => item.canonical))] }
+      let cachedCatalog = store._endfieldRelationCatalog
+      if (cachedCatalog?.dataVersion !== store.dataVersion) {
+        let value
+        try {
+          const loaded = await store.getDocumentByPath?.('config/retravelers.json')
+          const record = loaded?.record || loaded
+          value = JSON.parse((record?.lines || []).map((line) => line.text).join('\n') || '{}')
+        } catch { value = {} }
+        cachedCatalog = { dataVersion: store.dataVersion, value }
+        store._endfieldRelationCatalog = cachedCatalog
+      }
+      const catalog = cachedCatalog.value
+      const normalizedText = normalized(text)
+      const relationHints = []
+      for (const row of catalog.retravelers || []) {
+        const names = [row.endfield_name, row.terra_memory_prototype].filter(Boolean)
+        if (names.some((name) => normalizedText.includes(normalized(name)))) {
+          relationHints.push({ kind: 'retraveler_memory_prototype', ...row,
+            query_terms: [...new Set([...names, '再旅者', '记忆原型'])] })
+        }
+      }
+      for (const row of catalog.visual_parallels_without_lore_relation || []) {
+        const names = [row.endfield_name, row.arknights_name].filter(Boolean)
+        if (names.some((name) => normalizedText.includes(normalized(name)))) {
+          relationHints.push({ kind: 'visual_parallel_without_lore_relation', ...row,
+            query_terms: names })
+        }
+      }
+      return { matches, entities: [...new Set(matches.map((item) => item.canonical))],
+        relation_hints: relationHints }
     }
   }
 }
@@ -168,6 +197,12 @@ function recognitionMessage(result) {
       '<prts:recognized-entities>',
       '本地别名图鉴从用户问题中识别到以下规范实体。这仅用于名称消歧；是否作为检索条件由你决定。',
       ...lines,
+      ...(result.relation_hints?.length ? [
+        '人工审校关系提示（用于展开检索，不是官方原文）：',
+        ...result.relation_hints.map((hint) => hint.kind === 'retraveler_memory_prototype'
+          ? `- ${hint.endfield_name}：再旅者；泰拉记忆原型=${hint.terra_memory_prototype || '未登记'}。检索词：${hint.query_terms.join('、')}。两者不是别名。`
+          : `- ${hint.endfield_name} / ${hint.arknights_name}：仅登记外观相似；现有剧情没有关系证据，不得推断为再旅者或记忆原型。`),
+      ] : []),
       '</prts:recognized-entities>',
     ].join('\n') }],
   }
@@ -195,7 +230,7 @@ export function applyEntityRecognition(ctx, store) {
       return next()
     }
     const downstream = await next()
-    if (!result.entities.length || downstream.kind !== 'enter') return downstream
+    if ((!result.entities.length && !result.relation_hints?.length) || downstream.kind !== 'enter') return downstream
     return { ...downstream, messages: [...downstream.messages, recognitionMessage(result)] }
   })
   return true

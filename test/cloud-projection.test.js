@@ -14,6 +14,7 @@ try {
 } catch { /* 兄弟仓库不可用 → 下方用例跳过 */ }
 
 const mapping = {
+  game: 'arknights',
   evidence_id: 'evi_alpha', candidate_id: 'cand_alpha',
   suggested_source_ref: 'official_game:story:test:L12',
   display_title: '测试篇章', start_line: 12, end_line: 15, line_range: '12-15',

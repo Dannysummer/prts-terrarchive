@@ -73,6 +73,7 @@ function addSourceAnchors(items, anchors) {
 
 export function projectedAnchorPoints(mappings) {
   return mappings.filter((mapping) => mapping.suggested_source_ref).map((mapping) => withoutEmptyMetadata({
+    game: mapping.game,
     title: mapping.display_title || mapping.title,
     lines: mapping.line_range || (mapping.start_line && mapping.end_line
       ? (Number(mapping.start_line) === Number(mapping.end_line)
@@ -97,7 +98,7 @@ export function projectCloudSearch(value) {
     .replace(/\b(?:evi|ev)_[A-Za-z0-9_-]+\b/gu, '相关资料')
     .replace(/\[(?:E|A|C|H)[1-9][0-9]*\]/gu, '')
   const anchorLines = projectedAnchorPoints(mappings).map((anchor) =>
-    `- 《${anchor.title || '原文'}》${anchor.lines ? `第 ${anchor.lines} 行` : ''}`
+    `- [${anchor.game === 'endfield' ? '终末地' : '明日方舟'}] 《${anchor.title || '原文'}》${anchor.lines ? `第 ${anchor.lines} 行` : ''}`
       + `${anchor.document_uid ? `（同名消歧：${anchor.document_uid}）` : ''}`)
   return [answerContext.trim(), anchorLines.length ? `## 可读取原文\n${anchorLines.join('\n')}` : '',
     data.errors?.length ? `## 警告\n${data.errors.map((item) => item.message || item).join('\n')}` : '']

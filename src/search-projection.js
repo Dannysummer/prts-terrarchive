@@ -1,6 +1,9 @@
 /** 将 public canonical corpus_search 结果渲染成紧凑的 grep 风格文本。 */
 
 const RESOURCE_LABELS = Object.freeze({
+  original_story: '官方剧情原文', archive: '官方档案库', knowledge: '审校资料',
+  wiki: '整理性 Wiki', character_story: '角色剧情',
+  entity_profile: '实体资料', reference: '引用资料', timeline: '时间线',
   story: '官方剧情原文', operator_record: '干员密录原文',
   character_profile: '官方角色档案', character_module: '官方模组文案',
   character_voice: '官方干员语音', character_skin: '官方时装文案',
@@ -91,7 +94,10 @@ function renderDocument(document, options) {
     .includes(document.resource_type)
     ? '引文状态：Wiki 为整理性资料；其中引号内容未核验为当前资料包官方原文，逐字引用前请回查原文。'
     : ''
-  return [`## ${document.title}`, `资料类型：${RESOURCE_LABELS[document.resource_type] || document.resource_type}`,
+  const game = document.game === 'endfield' ? '终末地'
+    : document.game === 'arknights' ? '明日方舟' : ''
+  return [`## ${document.title}`, game ? `游戏：${game}` : '',
+    `资料类型：${RESOURCE_LABELS[document.resource_type] || document.resource_type}`,
     wikiNotice, body, document.matches_truncated ? '本篇仍有其他命中；请增加过滤条件或按已知行号读取。' : '']
     .filter(Boolean).join('\n')
 }
@@ -118,6 +124,8 @@ export function projectSearch(value, options = {}) {
       ? `已检查完整检索范围，共匹配 ${value.page.total_documents} 篇资料。`
       : '已扫描至当前检索范围末尾。'
     : ''
-  return [heading, ...documents.map((document) => renderDocument(document, options)), zero, complete, next]
+  const warnings = (value?.warnings || []).length
+    ? `## 资料提示\n${value.warnings.map((item) => `- ${item.message || item}`).join('\n')}` : ''
+  return [heading, warnings, ...documents.map((document) => renderDocument(document, options)), zero, complete, next]
     .filter(Boolean).join('\n\n')
 }

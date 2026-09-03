@@ -20,7 +20,7 @@
  *   releasesDir      资料包 releases 目录（默认 $DSH_HOME/prts-corpus/releases）
  *   cacheShards      分片 LRU 缓存大小（默认 8）
  *   download         { releaseId, order, siteBaseUrl } 设置页显式下载的版本与来源
- *   cloud            { baseUrl, game, userId, token, timeoutMs }；省略则不注册云端工具
+ *   cloud            { baseUrl, game, userId, token, timeoutMs }；game 默认 all（双游戏）
  */
 
 import { isAbsolute, join, resolve } from 'node:path'
@@ -56,7 +56,7 @@ const storesByDirectory = new Map()
 
 const READ_DESCRIPTION = [
   '按完整自然语言标题读取 PRTS.chat 本地资料；title + line 扩大原文上下文，title + section 读取 Wiki 字段，title + mode=document 分页阅读全文。',
-  'cursor 分页时直接原样提交；可以重复附带与游标一致的 max_lines/max_chars，其他读取参数不能同时提交。剧情标题使用“活动 · 章节代码 · 篇名 · 行动前后”，不使用内部 ID、ref 或路径。',
+  '继续阅读时使用上次结果给出的完整 title 和下一行 line，不要生成或复述内部 cursor。旧会话里的 cursor 仅用于兼容，可以同时带正确的 title 和新的 max_lines/max_chars。剧情标题使用“活动 · 章节代码 · 篇名 · 行动前后”，不使用内部 ID、ref 或路径。',
   '引用原文使用“《篇章名》第 N 行”；不要使用内部代号、路径或自造篇章名。',
 ].join(' ')
 
@@ -73,7 +73,7 @@ const TIMELINE_DESCRIPTION = [
 ].join(' ')
 
 const CLOUD_SEARCH_DESCRIPTION = [
-  '用自然语言查询 PRTS.chat 云端的图谱、档案、原文、自建 Wiki 和时间线组合索引。',
+  '用一次自然语言请求同时查询 PRTS.chat 云端的明日方舟与终末地图谱、档案、原文、自建 Wiki 和时间线组合索引；只有用户明确限定游戏时才使用 games 收窄。',
   '返回末尾的「## 可读取原文」列出已映射到本地篇章的完整自然语言标题与行号；直接按 title + line 调用 corpus_read。',
 ].join(' ')
 
@@ -87,7 +87,11 @@ const CLOUD_INSPECT_DESCRIPTION = [
 const RESOURCE_TYPES = ['story', 'character_profile', 'character_module', 'character_voice',
   'character_skin', 'operator_record', 'character_bundle', 'character_wiki', 'story_wiki',
   'character_activity_wiki', 'reviewed_wiki',
-  'terra_journey', 'entity_profile', 'reference']
+  'terra_journey', 'entity_profile', 'reference',
+  'original_story', 'archive', 'knowledge', 'wiki', 'character_story', 'timeline']
+
+const CONTENT_TYPES = ['dialogue', 'cutscene', 'radio', 'remote_comm', 'black_screen',
+  'environment_talk', 'sns_topic', 'sns_chat', 'narration', 'archive', 'knowledge']
 
 const stringList = (description) => ({ type: 'array', items: { type: 'string' }, description })
 
@@ -97,6 +101,11 @@ const SEARCH_PARAMETERS = {
     query: { type: 'string', description: '短搜索词：实体名、篇章展示名、活动名或原句片段；不要直接提交整句研究问题' },
     resource_types: { type: 'array', items: { type: 'string', enum: RESOURCE_TYPES },
       description: '资料类型；character_bundle 可一次查看角色档案、模组、语音和密录' },
+    games: { type: 'array', items: { type: 'string', enum: ['arknights', 'endfield'] },
+      description: '可选游戏过滤；省略时在同一次调用中同时检索明日方舟与终末地' },
+    content_types: { type: 'array', items: { type: 'string', enum: CONTENT_TYPES },
+      description: '统一内容形式，例如 dialogue、cutscene、radio、sns_chat；两款游戏使用相同参数' },
+    collection_names: stringList('上级资料集合展示名；明日方舟活动与终末地任务都使用此字段'),
     character_names: stringList('角色展示名，如“凯尔希”'),
     story_names: stringList('剧情篇章的展示名，如“晶簇之内”；不要填写内部 story_id 或路径'),
     activity_names: stringList('活动展示名'),
@@ -125,9 +134,11 @@ const SEARCH_OUTPUT_SCHEMA = {
     result_kind: { type: 'string', enum: ['text_matches', 'structured_matches',
       'complete_sections', 'documents'] },
     documents: { type: 'array', items: { type: 'object', additionalProperties: false,
-      required: ['title', 'resource_type', 'matches', 'matches_truncated'],
+      required: ['game', 'title', 'resource_type', 'content_type', 'matches', 'matches_truncated'],
       properties: {
+        game: { type: 'string', enum: ['arknights', 'endfield'] },
         title: { type: 'string' }, resource_type: { type: 'string' },
+        content_type: { type: 'string' }, collection_name: { type: 'string' },
         activity_name: { type: 'string' }, character_name: { type: 'string' },
         matches_truncated: { type: 'boolean' },
         matches: { type: 'array', items: { type: 'object', additionalProperties: false,
@@ -169,6 +180,11 @@ const SEARCH_OUTPUT_SCHEMA = {
           } }, { type: 'null' }] } } },
     truncated: { type: 'boolean' },
     truncation_reasons: { type: 'array', items: { type: 'string' } },
+    warnings: { type: 'array', items: { type: 'object', additionalProperties: false,
+      required: ['code', 'game', 'message'], properties: {
+        code: { type: 'string' }, game: { type: 'string', enum: ['arknights', 'endfield'] },
+        message: { type: 'string' },
+      } } },
   },
 }
 
@@ -181,7 +197,7 @@ const READ_PARAMETERS = {
     section: { type: 'string', enum: WIKI_SECTION_VALUES, description: '读取 Wiki 标签字段' },
     before: { type: 'integer', description: 'around 前文行数，默认 3，上限 100' },
     after: { type: 'integer', description: 'around 后文行数，默认 3，上限 100' },
-    cursor: { type: 'string', description: '继续上一次阅读；可重复附带与游标一致的 max_lines/max_chars，不能附带其他参数' },
+    cursor: { type: 'string', description: '仅兼容旧会话中的不透明游标；新调用应使用上次结果给出的 title + line' },
     max_lines: { type: 'integer', description: '最多返回行数，默认 100，上限 500' },
     max_chars: { type: 'integer', description: '最多返回字符数，默认 12000，上限 100000' },
   },
@@ -193,8 +209,9 @@ const READ_OUTPUT_SCHEMA = {
   required: ['primary', 'page'],
   properties: {
     primary: { type: 'object', additionalProperties: false,
-      required: ['title', 'kind', 'selection', 'lines', 'citation'],
-      properties: { title: { type: 'string' }, kind: { type: 'string' },
+      required: ['game', 'title', 'kind', 'selection', 'lines', 'citation'],
+      properties: { game: { type: 'string', enum: ['arknights', 'endfield'] },
+        title: { type: 'string' }, kind: { type: 'string' },
         selection: { type: 'object', additionalProperties: false,
           required: ['mode', 'line_start', 'line_end', 'truncated'],
           properties: { mode: { type: 'string' }, line_start: { type: 'integer' },
@@ -202,12 +219,17 @@ const READ_OUTPUT_SCHEMA = {
             truncated: { type: 'boolean' } } },
         lines: { type: 'array', items: { type: 'object', additionalProperties: false,
           required: ['line', 'line_type', 'speaker', 'text'],
-          properties: { line: { type: 'integer' }, line_type: { type: 'string' },
-            speaker: { type: 'string' }, text: { type: 'string' } } } },
+          properties: { line: { type: 'integer' }, source_line_id: { type: 'string' },
+            line_type: { type: 'string' }, speaker: { type: 'string' }, speaker_id: { type: 'string' },
+            text: { type: 'string' }, audio: { type: 'string' }, hint: { type: 'string' } } } },
         text: { type: 'string' }, citation: { type: 'string' } } },
-    page: { type: 'object', required: ['returned_lines', 'has_more', 'next_cursor'],
+    page: { type: 'object', required: ['returned_lines', 'has_more', 'continuation'],
       properties: { returned_lines: { type: 'integer' }, has_more: { type: 'boolean' },
-        next_cursor: { oneOf: [{ type: 'string' }, { type: 'null' }] } } },
+        continuation: { oneOf: [{ type: 'object', additionalProperties: false,
+          required: ['title', 'line', 'before', 'after'], properties: {
+            title: { type: 'string' }, line: { type: 'integer' }, before: { type: 'integer' },
+            after: { type: 'integer' },
+          } }, { type: 'null' }] } } },
   },
 }
 
@@ -230,6 +252,8 @@ const CLOUD_SEARCH_PARAMETERS = {
   type: 'object', additionalProperties: false, required: ['query'],
   properties: {
     query: { type: 'string', description: '改写为语义完整、适合向量检索的自然语言' },
+    games: { type: 'array', items: { type: 'string', enum: ['arknights', 'endfield'] },
+      description: '可选游戏范围；省略时同一次调用同时检索明日方舟与终末地' },
     depth: { type: 'string', enum: ['fast', 'standard', 'deep'],
       description: '检索深度：fast 轻量意图路由；standard 保证加入 vector；deep 使用 graph、csv、vector。首轮通常省略' },
     evidence_policy: { type: 'string', enum: ['mixed', 'original_only'],
@@ -316,6 +340,8 @@ const CLOUD_INSPECT_PARAMETERS = {
   type: 'object', additionalProperties: false,
   description: '查看最近一次云端检索的指定区段；request_id 由运行时自动注入',
   properties: {
+    games: { type: 'array', items: { type: 'string', enum: ['arknights', 'endfield'] },
+      description: '只查看指定游戏的候选、来源或事件；省略时查看联合状态' },
     section: { type: 'string', enum: ['summary', 'candidates', 'selected_sources', 'events', 'trace_steps', 'answer_context'],
       description: '默认 summary' },
     cursor: { type: 'integer', description: '分页游标：原样复制上次返回的 next_cursor' },
@@ -349,20 +375,27 @@ async function modelReadToContract(args = {}, store) {
     throw Object.assign(new Error('读取参数必须是对象'), { code: 'INVALID_REQUEST' })
   }
   if (args.cursor !== undefined) {
-    const allowed = new Set(['cursor', 'max_lines', 'max_chars'])
+    const allowed = new Set(['cursor', 'title', 'mode', 'max_lines', 'max_chars'])
     if (Object.keys(args).some((key) => !allowed.has(key))) {
-      throw Object.assign(new Error('cursor 只能附带与游标一致的 max_lines/max_chars，不能同时提供其他读取参数'),
+      throw Object.assign(new Error('旧 cursor 只能附带 title、mode=document、max_lines/max_chars'),
         { code: 'INVALID_REQUEST' })
     }
     const restored = readContractFromCursor(args.cursor)
-    for (const key of ['max_lines', 'max_chars']) {
-      if (args[key] !== undefined && args[key] !== restored.limits[key]) {
-        throw Object.assign(new Error(
-          `${key}=${args[key]} 与 cursor 绑定值 ${restored.limits[key]} 冲突；分页时请省略该参数或保持原值`,
-        ), { code: 'INVALID_REQUEST' })
+    if (args.mode !== undefined && args.mode !== 'document') {
+      throw Object.assign(new Error('旧 cursor 只兼容 mode=document'), { code: 'INVALID_REQUEST' })
+    }
+    if (args.title !== undefined) {
+      const record = await store.getDocumentByTitle(String(args.title).trim())
+      if (!record || record.record.document.document_id !== restored.locator.document_id) {
+        throw Object.assign(new Error('title 与 cursor 指向的资料不一致；请使用 cursor 对应的完整标题'),
+          { code: 'INVALID_REQUEST' })
       }
     }
-    return restored
+    return { ...restored, limits: {
+      ...restored.limits,
+      ...(args.max_lines !== undefined ? { max_lines: args.max_lines } : {}),
+      ...(args.max_chars !== undefined ? { max_chars: args.max_chars } : {}),
+    } }
   }
   const title = String(args.title ?? '').trim()
   if (!title) throw Object.assign(new Error('必须提供完整自然语言 title'), { code: 'INVALID_REQUEST' })
@@ -557,7 +590,18 @@ export async function apply(ctx, config = {}) {
           throw Object.assign(new Error('搜索参数必须是对象'),
             { code: 'INVALID_REQUEST', retryable: false })
         }
-        const requestHash = createHash('sha256').update(JSON.stringify(args)).digest('hex')
+        const enabledGames = shared.effective().enabledGames
+        let scopedArgs = args
+        if (args.cursor == null) {
+          const requestedGames = Array.isArray(args.games) ? args.games : enabledGames
+          const games = requestedGames.filter((game) => enabledGames.includes(game))
+          if (!games.length) {
+            throw Object.assign(new Error('请求的游戏资料库当前未启用，请先在 PRTS 资料设置中勾选'),
+              { code: 'INVALID_REQUEST', retryable: false })
+          }
+          scopedArgs = { ...args, games }
+        }
+        const requestHash = createHash('sha256').update(JSON.stringify(scopedArgs)).digest('hex')
         if (callId && completedSearchCalls.has(callId)) {
           const cached = completedSearchCalls.get(callId)
           if (cached.requestHash !== requestHash) return {
@@ -567,7 +611,7 @@ export async function apply(ctx, config = {}) {
           }
           return structuredClone(cached.response)
         }
-        const response = await executeSearch(store, args, { signal: exec?.signal,
+        const response = await executeSearch(store, scopedArgs, { signal: exec?.signal,
           requestId: callId || undefined })
         if (response?.error) {
           throw Object.assign(new Error(response.error.message),
@@ -661,8 +705,9 @@ export async function apply(ctx, config = {}) {
           : new AnonymousSessionProvider({ baseUrl: c.cloudBaseUrl,
             userId: c.cloudUserId || cloudClientId || undefined,
             timeoutMs: c.cloudTimeoutMs })
+        const cloudGame = c.enabledGames.length === 2 ? 'all' : c.enabledGames[0]
         return new CloudRetrievalClient({
-          baseUrl: c.cloudBaseUrl, tokenProvider, game: c.cloudGame || 'arknights',
+          baseUrl: c.cloudBaseUrl, tokenProvider, game: cloudGame,
           timeoutMs: c.cloudTimeoutMs, maxResponseBytes: c.cloudMaxResponseBytes,
         })
       })
@@ -678,7 +723,12 @@ export async function apply(ctx, config = {}) {
             const evidenceState = evidenceStates.forExecution(exec)
             const cloud = cloudClients.forExecution(exec)
             await cloud.capabilities({ signal: exec?.signal })
-            const payload = { ...args, intent_id: evidenceState.cloudIntentId }
+            const requestedGames = Array.isArray(args.games) ? args.games : c.enabledGames
+            const games = requestedGames.filter((game) => c.enabledGames.includes(game))
+            if (!games.length) throw Object.assign(
+              new Error('请求的游戏资料库当前未启用，请先在 PRTS 资料设置中勾选'),
+              { code: 'INVALID_REQUEST', retryable: false })
+            const payload = { ...args, games, intent_id: evidenceState.cloudIntentId }
             const response = await cloud.search(payload, { signal: exec?.signal })
             const mapped = await attachLocalSourceMappings(store, response, { signal: exec?.signal })
             rememberCloudMappings(evidenceState, mapped)
@@ -716,7 +766,7 @@ export async function apply(ctx, config = {}) {
       })
       if (typeof inspectDispose === 'function') cloudDisposers.push(inspectDispose)
 
-      toolCtx.logger?.info?.(`prts-corpus: cloud tools enabled (baseUrl=${c.cloudBaseUrl}, game=${c.cloudGame})`)
+      toolCtx.logger?.info?.(`prts-corpus: cloud tools enabled (baseUrl=${c.cloudBaseUrl}, games=${c.enabledGames.join(',')})`)
       return true
     }
     rebuildCloud()

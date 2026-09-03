@@ -20,7 +20,8 @@ export const CONFIG_DEFAULTS = Object.freeze({
   cloudEnabled: false,
   cloudBaseUrl: DEFAULT_SITE_BASE_URL,
   cloudToken: '',
-  cloudGame: 'arknights',
+  cloudGame: 'all',
+  enabledGames: Object.freeze(['arknights', 'endfield']),
   cloudUserId: '',
   downloadReleaseId: DEFAULT_RELEASE_ID,
   downloadSiteBaseUrl: DEFAULT_SITE_BASE_URL,
@@ -48,7 +49,10 @@ const WRITABLE = {
   cloudEnabled: (v) => typeof v === 'boolean',
   cloudBaseUrl: isServiceBaseUrl,
   cloudToken: (v) => typeof v === 'string' && v.length < 4096,
-  cloudGame: (v) => v === 'arknights' || v === 'endfield',
+  cloudGame: (v) => v === 'all' || v === 'arknights' || v === 'endfield',
+  enabledGames: (v) => Array.isArray(v) && v.length > 0 && v.length <= 2
+    && new Set(v).size === v.length
+    && v.every((entry) => entry === 'arknights' || entry === 'endfield'),
   cloudUserId: (v) => typeof v === 'string' && v.length < 128,
   downloadReleaseId: (v) => typeof v === 'string' && RELEASE_ID_PATTERN.test(v),
   downloadSiteBaseUrl: isServiceBaseUrl,
@@ -71,6 +75,7 @@ function baseLayer(patchConfig = {}) {
     if (cloud.game) base.cloudGame = cloud.game
     if (cloud.userId) base.cloudUserId = String(cloud.userId)
   }
+  if (Array.isArray(patchConfig.enabledGames)) base.enabledGames = [...patchConfig.enabledGames]
   const download = patchConfig.download
   if (download?.releaseId) base.downloadReleaseId = String(download.releaseId)
   if (download?.siteBaseUrl) base.downloadSiteBaseUrl = String(download.siteBaseUrl)
@@ -151,11 +156,20 @@ export function createSharedState({ patchConfig, configPath, releasesDir }) {
     /** 三层合并后的生效配置 */
     effective() {
       const effective = { ...CONFIG_DEFAULTS, ...base, ...user }
-      return { ...effective, downloadOrder: [...effective.downloadOrder] }
+      // 旧配置只有 cloudGame。首次打开新版设置页之前仍沿用旧选择，避免
+      // 升级后悄悄把单游戏范围放宽为双游戏。
+      const explicitlyEnabled = user.enabledGames ?? base.enabledGames
+      const enabledGames = explicitlyEnabled
+        ? [...explicitlyEnabled]
+        : effective.cloudGame === 'all'
+          ? ['arknights', 'endfield'] : [effective.cloudGame]
+      return { ...effective, enabledGames, downloadOrder: [...effective.downloadOrder] }
     },
     /** 当前用户层（配置界面的编辑起点） */
     userLayer() {
-      return { ...user, ...(user.downloadOrder ? { downloadOrder: [...user.downloadOrder] } : {}) }
+      return { ...user,
+        ...(user.enabledGames ? { enabledGames: [...user.enabledGames] } : {}),
+        ...(user.downloadOrder ? { downloadOrder: [...user.downloadOrder] } : {}) }
     },
     /** 订阅已验证配置的变化。 */
     subscribe(listener) {

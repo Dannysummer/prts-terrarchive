@@ -62,6 +62,30 @@ test('normalizeReadRequest：默认值与跨字段规则', () => {
   )
 })
 
+test('normalizeReadRequest 接受联合协议的终末地稳定 source_ref', () => {
+  const { normalized, refLine } = normalizeReadRequest({
+    intent_id: 'endfield-ref',
+    locator: { source_ref: 'prts:endfield:story:dlg_c34m1_01:L18' },
+    selection: { mode: 'around' },
+  })
+  assert.equal(refLine, 18)
+  assert.equal(normalized.locator.source_ref, 'prts:endfield:story:dlg_c34m1_01:L18')
+
+  const archive = normalizeReadRequest({
+    intent_id: 'endfield-archive-ref',
+    locator: { source_ref: 'prts:endfield:archive:nar_document_v0d8_14_1:L5' },
+    selection: { mode: 'around' },
+  })
+  assert.equal(archive.refLine, 5)
+
+  const profile = normalizeReadRequest({
+    intent_id: 'endfield-profile-ref',
+    locator: { source_ref: 'prts:endfield:character:chr_0034_typhoea:profiles:L5' },
+    selection: { mode: 'around' },
+  })
+  assert.equal(profile.refLine, 5)
+})
+
 test('store：初始化并建立文档索引', async () => {
   const store = new CorpusStore({ releasesDir })
   await store.ready()

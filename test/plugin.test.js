@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { CorpusStore } from '../src/store.js'
+import { executeRead } from '../src/read.js'
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)))
 const require = createRequire(import.meta.url)
@@ -543,18 +545,32 @@ test('v4 facade：可穷尽按文档搜索、完整 Wiki 字段、自然读取�
       max_lines: 2 }, { agent: {}, callId: 'v2-read-page-1' })
     assert.equal(firstPage.page.returned_lines, 2)
     assert.equal(firstPage.page.has_more, true)
-    const secondPage = await readTool.execute({ cursor: firstPage.page.next_cursor },
+    assert.deepEqual(firstPage.page.continuation, {
+      title: document.title, line: firstPage.primary.selection.line_end + 1, before: 0, after: 100,
+    })
+    assert.equal(firstPage.page.next_cursor, undefined,
+      '模型可见的读取结果不应暴露内部 cursor')
+    assert.doesNotMatch(readTool.output.render({}, firstPage)[0].text, /cursor/u)
+    assert.match(readTool.output.render({}, firstPage)[0].text,
+      new RegExp(`继续阅读《${document.title.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}》`, 'u'))
+    const secondPage = await readTool.execute(firstPage.page.continuation,
       { agent: {}, callId: 'v2-read-page-2' })
     assert.equal(secondPage.primary.title, document.title)
-    assert.equal(secondPage.page.returned_lines, 2)
     assert.notEqual(secondPage.primary.lines[0].line, firstPage.primary.lines[0].line)
-    const repeatedLimitPage = await readTool.execute({ cursor: firstPage.page.next_cursor,
-      max_lines: 2 }, { agent: {}, callId: 'v2-read-page-repeated-limit' })
-    assert.equal(repeatedLimitPage.page.returned_lines, 2)
-    await assert.rejects(readTool.execute({ cursor: firstPage.page.next_cursor, max_lines: 3 }, {}),
-      /与 cursor 绑定值 2 冲突/u)
-    await assert.rejects(readTool.execute({ cursor: firstPage.page.next_cursor, title: document.title }, {}),
-      /cursor 只能附带/u)
+
+    // 已经写入旧会话的签名 cursor 仍可恢复，并允许模型附带自然标题及改变预算。
+    const legacyStore = new CorpusStore({ releasesDir: LOCAL_CONFIG.releasesDir })
+    await legacyStore.ready()
+    const legacyDocument = await legacyStore.getDocumentByTitle(document.title)
+    const legacyFirst = await executeRead(legacyStore, {
+      intent_id: 'legacy-cursor', locator: { document_id: legacyDocument.record.document.document_id },
+      selection: { mode: 'document' }, limits: { max_lines: 2 },
+    }, {})
+    const legacyNext = await readTool.execute({ title: document.title,
+      cursor: legacyFirst.page.next_cursor, max_lines: 3 },
+    { agent: {}, callId: 'v2-read-legacy-cursor' })
+    assert.equal(legacyNext.primary.lines[0].line, 3)
+    assert.equal(legacyNext.page.returned_lines, 3)
   } finally { dispose() }
 })
 

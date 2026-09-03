@@ -98,7 +98,7 @@ download.
 - `corpus_search` — grep-style search over the local corpus: literal or
   bounded-regex matching on NFKC-normalized text, with resource-type /
   character / story / activity / entity / speaker / Wiki-field filters
-- `corpus_read` — read exact source lines by natural title + official line
+- `corpus_read` — read exact source lines and continue by natural title + official line; opaque cursors are legacy-only
   number, read a tagged Wiki field, or page through a whole document; story
   documents return requested text only (self-built summaries and the
   activity timeline must be fetched explicitly, e.g. via `timeline_search`)

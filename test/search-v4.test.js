@@ -45,6 +45,20 @@ function story(index, text) {
   }
 }
 
+function endfieldStory(index, text) {
+  return {
+    document: {
+      game: 'endfield', document_id: `endfield:story:dlg-test-${index}`,
+      document_type: 'story', document_kind: 'story', document_category: 'endfield_original',
+      resource_type: 'original_story', content_type: 'dialogue',
+      collection_name: '测试任务', mission_title: '测试任务',
+      story_key: `dlg-test-${index}`, display_title: `测试任务 · 对话 ${index}`,
+    },
+    speakers: ['管理员'],
+    lines: [{ line_number: 1, line_type: 'dialogue', speaker_raw: '管理员', text }],
+  }
+}
+
 test('全部公开资料类型都有可读且带类型的自然标题', () => {
   const titles = [
     naturalDocumentTitle({ document_type: 'story', document_category: 'main',
@@ -71,6 +85,94 @@ test('全部公开资料类型都有可读且带类型的自然标题', () => {
     '移动城市的建造模式 / 大地巡旅', '乌萨斯 / 实体资料', '泰拉年表',
   ])
   assert.ok(titles.every((title) => title && title !== '正文'))
+})
+
+test('联合搜索默认同时返回两款游戏，并用同一参数按游戏、集合和内容类型过滤', async () => {
+  const store = fakeStore([
+    story(0, '共同检索词出现在泰拉'),
+    endfieldStory(0, '共同检索词出现在塔卫二'),
+  ])
+  const both = await executeSearch(store, { query: '共同检索词', resource_types: ['original_story'] })
+  assert.equal(both.error, undefined)
+  assert.deepEqual(new Set(both.documents.map((item) => item.game)), new Set(['arknights', 'endfield']))
+  assert.match(both.documents.find((item) => item.game === 'endfield').title, /^终末地 · /)
+  assert.equal(both.documents.find((item) => item.game === 'endfield').matches[0].evidence_kind,
+    'official_canonical')
+
+  const scoped = await executeSearch(store, {
+    query: '共同检索词', games: ['endfield'], resource_types: ['original_story'],
+    content_types: ['dialogue'], collection_names: ['测试任务'],
+  })
+  assert.equal(scoped.error, undefined)
+  assert.deepEqual(scoped.documents.map((item) => item.game), ['endfield'])
+})
+
+test('v2 窄资料类型仍参与 character_bundle 与 reviewed_wiki 合集过滤', async () => {
+  const records = [
+    { document: { ...endfieldStory(0, '角色档案正文').document,
+      document_id: 'endfield:character:test:profiles', document_type: 'character',
+      document_category: '角色档案', document_kind: 'profiles',
+      resource_type: 'character_profile', character_name: '提弗洛斯' },
+      speakers: [], lines: [{ line_number: 1, speaker_raw: '', text: '角色档案正文' }] },
+    { document: { ...endfieldStory(1, '审校资料正文').document,
+      document_id: 'endfield:knowledge:test', document_type: 'knowledge',
+      document_category: '角色 Wiki', document_kind: 'wiki',
+      resource_type: 'knowledge' }, speakers: [],
+      lines: [{ line_number: 1, speaker_raw: '', text: '审校资料正文' }] },
+  ]
+  const store = fakeStore(records)
+  const bundle = await executeSearch(store, { query: '角色档案正文',
+    resource_types: ['character_bundle'] })
+  assert.equal(bundle.documents.length, 1)
+  const reviewed = await executeSearch(store, { query: '审校资料正文',
+    resource_types: ['reviewed_wiki'] })
+  assert.equal(reviewed.documents.length, 1)
+})
+
+test('查询与正式档案标题完全相同时官方档案优先于正文提及', async () => {
+  const ordinary = endfieldStory(0, '很多人都曾经提到世代摇篮')
+  const archive = { document: {
+    game: 'endfield', document_id: 'endfield:archive:generation-cradle',
+    document_type: 'knowledge', document_kind: 'official_archive',
+    document_category: '中枢档案', resource_type: 'archive', content_type: 'archive',
+    display_title: '世代摇篮', collection_name: '中枢档案',
+  }, speakers: [], lines: [{ line_number: 1, speaker_raw: '', text: '世代摇篮是正式档案。' }] }
+  const result = await executeSearch(fakeStore([ordinary, archive]), { query: '世代摇篮' })
+  assert.equal(result.documents[0].resource_type, 'archive')
+  assert.equal(result.documents[0].title, '终末地 · 世代摇篮')
+})
+
+test('联合搜索按游戏交错候选，连续页面不会被一个游戏的高频资料占满', async () => {
+  const records = [
+    ...Array.from({ length: 20 }, (_, index) => story(index, `共同高频词 ${index}`)),
+    ...Array.from({ length: 20 }, (_, index) => endfieldStory(index, `共同高频词 ${index}`)),
+  ]
+  const store = fakeStore(records)
+  const first = await executeSearch(store, { query: '共同高频词' })
+  assert.deepEqual(new Set(first.documents.map((item) => item.game)), new Set(['arknights', 'endfield']))
+  assert.ok(first.page.next_after)
+
+  const second = await executeSearch(store, {
+    query: '共同高频词', after: first.page.next_after,
+  })
+  assert.deepEqual(new Set(second.documents.map((item) => item.game)), new Set(['arknights', 'endfield']))
+  assert.equal(new Set([...first.documents, ...second.documents]
+    .map((item) => `${item.game}\0${item.title}`)).size,
+    first.documents.length + second.documents.length)
+})
+
+test('标题锚点按同一 Unicode 规则比较，全角标点不会让下一页失效', async () => {
+  const records = Array.from({ length: 20 }, (_, index) => story(index, `标点翻页词 ${index}`))
+  records[11].document.story_name = '走吧，走吧'
+  records[11].document.display_title = '走吧，走吧'
+  const store = fakeStore(records)
+  const first = await executeSearch(store, { query: '标点翻页词' })
+  assert.match(first.page.next_after.title, /，/u)
+  const second = await executeSearch(store, {
+    query: '标点翻页词', after: first.page.next_after,
+  })
+  assert.equal(second.error, undefined)
+  assert.equal(second.documents.length, 8)
 })
 
 async function exhaust(store, request) {

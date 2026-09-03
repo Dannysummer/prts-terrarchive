@@ -23,9 +23,10 @@ import { createReadStream } from 'node:fs'
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
-/** ModelScope 上两个资料仓库（发布脚本固定映射）。 */
+/** ModelScope 分仓：两款游戏各自资料 + 跨游戏共享审校资料。 */
 export const MODELSCOPE_REPOS = Object.freeze({
   official: 'HTiantian/prts-agent-corpus-arknights-gamedata',
+  endfield: 'HTiantian/prts-agent-corpus-endfield',
   community: 'HTiantian/prts-agent-corpus-selfbuilt',
 })
 
@@ -41,7 +42,8 @@ export const DEFAULT_SITE_BASE_URL = 'https://prts.chat'
  */
 export const RELEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const SHA256_PATTERN = /^[0-9a-f]{64}$/
-const PACK_IDS = ['official_game', 'reviewed_wiki', 'terra_journey', 'entities', 'references']
+const PACK_IDS = ['official_game', 'endfield_official_game', 'endfield_reviewed_knowledge',
+  'reviewed_wiki', 'terra_journey', 'entities', 'references']
 const ASSET_PATH_PATTERN = /^(?:shards\/[A-Za-z0-9._-]+\.jsonl|search-index\/[A-Za-z0-9._-]+\.bin)\.gz$/
 const MODELSCOPE_FILE_PATTERN = (releaseId) =>
   new RegExp(`^releases/${releaseId}/(?:${PACK_IDS.join('|')})/(?:pack-manifest\\.json|(?:shards/[A-Za-z0-9._-]+\\.jsonl|search-index/[A-Za-z0-9._-]+\\.bin)\\.gz)$`)
@@ -373,10 +375,17 @@ export async function resolveModelScopeCurrentRelease(env = {}) {
 async function listFromModelScope(releaseId, env) {
   const plans = []
   let dataVersion = null
-  for (const group of ['official', 'community']) {
+  for (const group of ['official', 'endfield', 'community']) {
     const repo = MODELSCOPE_REPOS[group]
-    const manifest = await fetchJson(
-      `https://modelscope.cn/datasets/${repo}/resolve/master/releases/${releaseId}/dataset-manifest.json`, env)
+    let manifest
+    try {
+      manifest = await fetchJson(
+        `https://modelscope.cn/datasets/${repo}/resolve/master/releases/${releaseId}/dataset-manifest.json`, env)
+    } catch (error) {
+      // 新增终末地分仓前发布的历史 release 只有两个镜像；继续允许安装。
+      if (group === 'endfield' && error?.code === 'RELEASE_NOT_FOUND') continue
+      throw error
+    }
     if (manifest?.kind !== 'prts-agent-modelscope-dataset-mirror' || manifest?.schema_version !== 1
       || String(manifest?.release_id ?? '') !== releaseId) {
       throw new InstallerFault('INVALID_MANIFEST', `${repo} 的 dataset-manifest 与 release 不匹配`)
@@ -387,7 +396,7 @@ async function listFromModelScope(releaseId, env) {
     }
     if (dataVersion === null) dataVersion = version
     else if (dataVersion !== version) {
-      throw new InstallerFault('INVALID_MANIFEST', '两个仓库的 dataset-manifest data_version 不一致')
+      throw new InstallerFault('INVALID_MANIFEST', 'ModelScope 分仓的 dataset-manifest data_version 不一致')
     }
     const files = manifest?.files
     if (!files || typeof files !== 'object' || Array.isArray(files)) {

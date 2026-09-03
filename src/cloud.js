@@ -294,17 +294,25 @@ export function createAgentCloudClientRegistry(createClient) {
 
 /**
  * @param {{ baseUrl: string, tokenProvider: { getToken(options?: {forceRefresh?: boolean, signal?: AbortSignal}): Promise<string> },
- *           game?: 'arknights' | 'endfield', timeoutMs?: number, maxResponseBytes?: number, fetchImpl?: typeof fetch }} options
+ *           game?: 'all' | 'arknights' | 'endfield', games?: ('arknights' | 'endfield')[],
+ *           timeoutMs?: number, maxResponseBytes?: number, fetchImpl?: typeof fetch }} options
  */
 export class CloudRetrievalClient {
   constructor({
-    baseUrl, tokenProvider, game = 'arknights', timeoutMs = 90_000,
+    baseUrl, tokenProvider, game = 'all', games, timeoutMs = 90_000,
     maxResponseBytes = 32 * 1024 * 1024, fetchImpl,
   } = {}) {
-    if (!['arknights', 'endfield'].includes(game)) throw new TypeError('不支持的游戏命名空间')
+    if (!['all', 'arknights', 'endfield'].includes(game)) throw new TypeError('不支持的游戏命名空间')
+    const effectiveGames = games || (game === 'all' ? ['arknights', 'endfield'] : [game])
+    if (!Array.isArray(effectiveGames) || effectiveGames.length < 1 || effectiveGames.length > 2
+        || new Set(effectiveGames).size !== effectiveGames.length
+        || effectiveGames.some((item) => !['arknights', 'endfield'].includes(item))) {
+      throw new TypeError('games 只能包含不重复的 arknights / endfield')
+    }
     this.baseUrl = baseUrl.replace(/\/+$/, '')
     this.tokenProvider = tokenProvider
     this.game = game
+    this.games = [...effectiveGames]
     this.timeoutMs = timeoutMs
     this.maxResponseBytes = maxResponseBytes
     this.fetchImpl = fetchImpl || fetch
@@ -331,6 +339,7 @@ export class CloudRetrievalClient {
   async search(arguments_, { signal } = {}) {
     const payload = structuredClone(arguments_)
     payload.request_id ||= `req-${randomUUID().replaceAll('-', '').slice(0, 24)}`
+    payload.games ||= [...this.games]
     return this.request('cloud_search', 'POST', payload, { signal })
   }
 
@@ -356,7 +365,8 @@ export class CloudRetrievalClient {
       try {
         const response = await this.fetchImpl(`${this.baseUrl}${PATHS[tool]}`, {
           method,
-          headers: { Accept: 'application/json', Authorization: authorization, 'X-Game': this.game,
+          headers: { Accept: 'application/json', Authorization: authorization,
+            ...(this.games.length === 1 ? { 'X-Game': this.games[0] } : { 'X-Games': this.games.join(',') }),
             'X-Client': DSH_CLIENT_HEADER,
             ...(body ? { 'Content-Type': 'application/json' } : {}) },
           ...(body ? { body: JSON.stringify(body) } : {}),

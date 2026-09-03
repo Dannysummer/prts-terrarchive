@@ -11,7 +11,7 @@
  *   - story 文档只返回请求的原文；剧情总结与时间线必须显式检索
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { computeLinesIntegrity, documentUid, naturalDocumentTitle } from './store.js'
+import { computeLinesIntegrity, documentGame, documentUid, naturalDocumentTitle } from './store.js'
 import { WIKI_SECTION_VALUES, wikiSectionRanges } from './wiki.js'
 
 export const CONTRACT_VERSION = 'prts-corpus-tools-v1'
@@ -19,7 +19,7 @@ export const CONTRACT_VERSION = 'prts-corpus-tools-v1'
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const SHA256_PATTERN = /^[0-9a-f]{64}$/
 const SOURCE_REF_PATTERN =
-  /^(?:official_game:(?:story:[^:]+|character:[^:]+:[^:]+)|client_data:(?:reviewed_wiki|terra_journey|entities|references):[0-9a-f]{24}):L([1-9][0-9]*)$/
+  /^(?:(?:official_game:(?:story:[^:]+|character:[^:]+:[^:]+)|client_data:(?:reviewed_wiki|terra_journey|entities|references):[0-9a-f]{24})|prts:(?:arknights|endfield):[A-Za-z0-9._:%/-]+):L([1-9][0-9]*)$/
 
 /** 游标签名密钥：插件实例生命周期内有效（重启即失效，符合契约的游标不透明语义）。 */
 const CURSOR_SECRET = randomBytes(32)
@@ -274,6 +274,7 @@ export function normalizeReadRequest(raw) {
 /** ---- 文档摘要投影 ---- */
 
 const SUMMARY_FIELDS = [
+  'game', 'resource_type', 'content_type', 'collection_name', 'collection_type',
   'document_id', 'document_type', 'document_category', 'document_kind', 'display_title',
   'collection_id', 'activity_id', 'activity_name', 'source_story_id', 'story_id', 'story_code',
   'story_name', 'part_type', 'part_label', 'char_id', 'character_name', 'path', 'text_sha256',
@@ -282,7 +283,8 @@ const SUMMARY_FIELDS = [
 ]
 
 function toDocumentSummary(documentRecord) {
-  const summary = { document_uid: documentUid(documentRecord.document_id) }
+  const summary = { document_uid: documentUid(documentRecord.document_id),
+    game: documentGame(documentRecord) }
   // 与浏览器 executor.summary() 一致：固定摘要字段缺失时输出空字符串，
   // 不能把 undefined 带过 Harness 的 lossless-JSON 工具边界。
   for (const field of SUMMARY_FIELDS) summary[field] = documentRecord[field] ?? ''
@@ -482,9 +484,13 @@ export async function executeRead(store, rawArgs, runtime) {
         format: 'lines',
         lines: selectedLines.map((line) => ({
           line_number: line.line_number,
+          ...(line.source_line_id ? { source_line_id: line.source_line_id } : {}),
           line_type: line.line_type ?? '',
           speaker_raw: line.speaker_raw ?? '',
+          ...(line.speaker_id ? { speaker_id: line.speaker_id } : {}),
           text: line.text ?? '',
+          ...(line.audio ? { audio: line.audio } : {}),
+          ...(line.hint ? { hint: line.hint } : {}),
           source_ref: `${document.source_ref_prefix}:L${line.line_number}`,
         })),
       }
@@ -748,21 +754,36 @@ function publicLine(line) {
     const escaped = speaker.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
     text = text.replace(new RegExp(`^${escaped}\\s*[：:]\\s*`, 'u'), '')
   }
-  return { line: line.line_number, line_type: line.line_type || '',
-    speaker, text }
+  return { line: line.line_number,
+    ...(line.source_line_id ? { source_line_id: line.source_line_id } : {}),
+    line_type: line.line_type || '', speaker,
+    ...(line.speaker_id ? { speaker_id: line.speaker_id } : {}),
+    text,
+    ...(line.audio ? { audio: line.audio } : {}),
+    ...(line.hint ? { hint: line.hint } : {}) }
 }
 
 /** 执行层富响应 → 模型/程序共用的自然定位 public result。 */
 export function projectReadPublic(value) {
   if (value?.status === 'error') return value
-  if (value?.primary) return value
+  if (value?.primary) {
+    const hasMore = Boolean(value.page?.has_more)
+    const nextLine = Number(value.primary.selection?.line_end) + 1
+    return { ...value, page: {
+      returned_lines: Number(value.page?.returned_lines || value.primary.lines?.length || 0),
+      has_more: hasMore,
+      continuation: hasMore && Number.isInteger(nextLine) && nextLine > 0
+        ? { title: value.primary.title, line: nextLine, before: 0, after: 100 }
+        : null,
+    } }
+  }
   const title = naturalDocumentTitle(value.document || {})
   const lines = value.content?.format === 'lines' ? (value.content.lines || []).map(publicLine) : []
   const kind = value.document?.document_type === 'story' ? 'official_story'
     : value.document?.document_type === 'knowledge' && value.document?.document_kind === 'wiki'
       ? 'wiki_curated' : 'local_document'
   return {
-    primary: { title,
+    primary: { game: documentGame(value.document || {}), title,
       kind,
       selection: { mode: value.selection?.mode, line_start: value.selection?.line_start,
         line_end: value.selection?.line_end,
@@ -774,7 +795,10 @@ export function projectReadPublic(value) {
         : `《${title}》第 ${value.selection?.line_start === value.selection?.line_end
           ? value.selection?.line_start : `${value.selection?.line_start}-${value.selection?.line_end}`} 行` },
     page: { returned_lines: Number(value.page?.returned || lines.length),
-      has_more: Boolean(value.page?.has_more), next_cursor: value.page?.next_cursor || null },
+      has_more: Boolean(value.page?.has_more),
+      continuation: value.page?.has_more
+        ? { title, line: Number(value.selection?.line_end) + 1, before: 0, after: 100 }
+        : null },
   }
 }
 
@@ -806,14 +830,11 @@ export function renderRead(_args, value) {
     }
     if (primary.text) parts.push(primary.text)
     parts.push(`引用：${primary.citation}`)
-    if (projected.page.has_more && projected.page.next_cursor) {
-      parts.push(`下一页：corpus_read({cursor:"${projected.page.next_cursor}"})`)
-    } else if (projected.page.has_more) {
-      // around/range/section 模式被 max_lines/max_chars 截断时不产生游标，
-      // 必须指明可执行的续读方式，否则模型会拿到 cursor:"null" 的无效指令。
-      const title = String(primary.title || '').replace(/"/gu, '\\"')
-      parts.push(`本次读取被 max_lines/max_chars 截断。继续读取：`
-        + `corpus_read({title:"${title}", line:${primary.selection.line_end + 1}, before:0, after:100})`)
+    if (projected.page.has_more && projected.page.continuation) {
+      const next = projected.page.continuation
+      const title = String(next.title || '').replace(/"/gu, '\\"')
+      parts.push(`继续阅读《${next.title}》，从第 ${next.line} 行开始。`)
+      parts.push(`调用：corpus_read({title:"${title}", line:${next.line}, before:0, after:100})`)
     }
     return [{ type: 'text', text: parts.join('\n') }]
   }

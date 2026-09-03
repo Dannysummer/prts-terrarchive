@@ -178,6 +178,14 @@
         "round_id": { "$ref": "#/$defs/identifier", "description": "同一意图内的云端检索轮次；省略时由运行时生成。" },
         "query": { "type": "string", "minLength": 1, "maxLength": 20000,
           "description": "首轮提交完整自然语言问题；可以保留原问题或在不改变含义与问题结构的前提下润色，不能退化为分词后的关键词堆砌。" },
+        "games": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["arknights", "endfield"] },
+          "description": "检索的游戏语料域；省略时同一次调用同时检索明日方舟与终末地。只有用户明确限定游戏时才收窄。"
+        },
         "depth": { "type": "string", "enum": ["fast", "standard", "deep"], "description": "云端检索深度；首轮省略以使用产品默认。" },
         "evidence_policy": { "type": "string", "enum": ["mixed", "original_only"], "description": "mixed 允许多资料来源，original_only 将最终来源限制为原文类；首轮通常省略。" },
         "options": { "$ref": "#/$defs/retrievalOptions", "description": "高级检索控制；新意图首轮通常省略。明确需要模糊检索单句原文时，首轮可只设置 search_intent=single_sentence_search；其他参数在确认召回缺口后再选择性设置。" }
@@ -198,6 +206,11 @@
         "cursor": { "type": "integer", "minimum": 0, "description": "数值分页起点；首次省略，后续使用响应的 next_cursor。" },
         "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "本页最多返回的条目数；服务端默认 50。" },
         "channels": { "$ref": "#/$defs/stringList" },
+        "games": {
+          "type": "array", "maxItems": 2, "uniqueItems": true,
+          "items": { "type": "string", "enum": ["arknights", "endfield"] },
+          "description": "只查看指定游戏的候选、来源或事件；省略时查看联合状态。"
+        },
         "query_variants": { "$ref": "#/$defs/stringList" },
         "retrievers": { "$ref": "#/$defs/stringList" },
         "source_types": {

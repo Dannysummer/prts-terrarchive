@@ -74,6 +74,31 @@ test('agent/pre-step：只附加实体消歧提示，不改写用户问题', asy
   assert.match(decision.messages[1].content[0].text, /是否作为检索条件由你决定/)
 })
 
+test('agent/pre-step：再旅者关系提示展开双方姓名且不把原型当别名', async () => {
+  let listener = null
+  const catalog = { retravelers: [{ endfield_name: '提弗洛斯',
+    terra_memory_prototype: '提丰', relation_status: 'confirmed' }],
+    visual_parallels_without_lore_relation: [] }
+  const ctx = { on(_name, callback) { listener = callback }, logger: { warn() {} } }
+  const store = {
+    loaded: true, dataVersion: 'relation-v1', async ready() {},
+    async *iterateDocuments() {},
+    async getDocumentByPath(path) {
+      if (path !== 'config/retravelers.json') return null
+      return { record: { lines: JSON.stringify(catalog, null, 2).split('\n')
+        .map((text, index) => ({ line_number: index + 1, text })) } }
+    },
+  }
+  applyEntityRecognition(ctx, store)
+  const original = { id: 'u2', role: 'user', source: { kind: 'user' },
+    content: [{ type: 'text', text: '提丰和提弗洛斯是什么关系？' }] }
+  const decision = await listener({ messages: [original], signal: new AbortController().signal },
+    async () => ({ kind: 'enter', messages: [original] }))
+  const notice = decision.messages[1].content[0].text
+  assert.match(notice, /提弗洛斯：再旅者；泰拉记忆原型=提丰/)
+  assert.match(notice, /两者不是别名/)
+})
+
 test('agent/pre-step：资料未加载时直接放行，不把首次请求变成初始化步骤', async () => {
   let listener = null
   let iterated = false

@@ -2,7 +2,7 @@
 
 ## 本地资料目录
 
-本地 release 由五个资料分区组成：`official_game`、`reviewed_wiki`、`terra_journey`、`entities` 和 `references`。Agent 不需要使用这些内部 pack 名；调用时使用下面的 `resource_types`。
+本地 release 同时包含明日方舟与终末地资料分区。Agent 不需要使用内部 pack 名；调用时使用统一的 `games`、`resource_types`、`content_types` 和 `collection_names`。
 
 | `resource_type` | 本地内容 | 来源／证据性质 | 适合的问题 |
 | --- | --- | --- | --- |
@@ -32,7 +32,7 @@
 - `character_names` 表示资料属于谁；`speakers` 表示谁亲口说话；`entity_names` 表示哪一实体出现在命中或结构化关联中。
 - 省略 query，只给资料归属条件时返回资料目录；省略 query 且选择一个 Wiki 字段时返回字段完整内容。
 - 默认 literal。regex 只用于确有必要的模式搜索；不支持反向引用和环视，也不会失败后自动改成 literal。
-- 原文命中固定返回 passage 外侧上下各一行。搜索预览宽度、每页文档数和每篇 passage 数不能调整；结果太多时增加过滤或只提交返回的 cursor 继续。
+- 原文命中固定返回 passage 外侧上下各一行。搜索预览宽度、每页文档数和每篇 passage 数不能调整；结果太多时增加过滤，或保留原搜索条件并提交返回的自然标题锚点 `next_after` 继续。不要把内部 cursor 写进新请求。
 - `entity_profile` 命中优先返回实体概述与历史摘要，不显示底层 JSON 骨架；实体资料使用“名称 / 实体资料”自然标题，与同名 Wiki 消歧。
 - 官方原文精确命中可直接引用。目录、标题、实体投影和整理性资料仍只是相应等级的入口或证据。
 
@@ -41,7 +41,8 @@
 - `title + line` 扩大命中上下文，按需设置 before/after。
 - `title + section` 读取 Wiki 字段。
 - `title + mode="document"` 分页阅读全文。
-- 下一页最好只提交 cursor；若宿主重复附带与游标中一致的 `max_lines` / `max_chars`，工具会兼容接受。不要同时重传标题、模式或不同的限制值。
+- 继续阅读时直接使用结果给出的完整 `title` 与下一行 `line`，通常形式为 `title + line + before:0 + after:100`。不要复制、生成或解释内部 cursor。
+- 已经存在于旧会话中的 cursor 仍可使用；兼容调用允许同时附带对应的完整 `title`、`mode="document"`，以及新的 `max_lines` / `max_chars`，但新一轮读取不得主动采用这种形式。
 - 只使用搜索或云端结果给出的完整自然语言标题，不使用 ref、路径、document ID 或短代号。
 - 只返回明确请求的原文、Wiki 字段或文档分页，不会自动附带剧情总结和活动时间线。
 

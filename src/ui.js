@@ -115,6 +115,63 @@ const releaseDirSize = async (dir) => {
   return total
 }
 
+const emptyDataset = (game) => ({
+  game, present: false, documentCount: 0, compressedSize: 0, packs: [],
+  releaseName: null, releaseTitle: null, gameVersion: null, sourceVersion: null, dataVersion: null,
+})
+
+/** 把联合 release 中的 pack 汇总成用户可理解的两个游戏资料库。 */
+async function readReleaseDatasets(dir, manifest) {
+  const datasets = {
+    arknights: emptyDataset('arknights'),
+    endfield: emptyDataset('endfield'),
+  }
+  const sharedPacks = []
+  for (const pack of Array.isArray(manifest?.packs) ? manifest.packs : []) {
+    const manifestPath = String(pack?.manifest_path ?? '')
+    if (!manifestPath || manifestPath.includes('..') || manifestPath.startsWith('/')) continue
+    let detail
+    try { detail = JSON.parse(await readFile(join(dir, manifestPath), 'utf8')) } catch { continue }
+    const packId = String(detail.pack_id ?? pack.pack_id ?? '')
+    const game = detail.game === 'arknights' || detail.game === 'endfield'
+      ? detail.game
+      : packId === 'official_game' ? 'arknights'
+        : packId.startsWith('endfield_') ? 'endfield' : null
+    const summary = {
+      packId,
+      authority: detail.authority ?? pack.authority ?? null,
+      documentCount: detail.document_count ?? pack.document_count ?? 0,
+      compressedSize: detail.compressed_size ?? pack.compressed_size ?? 0,
+      releaseName: detail.release_id ?? null,
+      releaseTitle: detail.release_title ?? detail.release_name ?? null,
+      gameVersion: detail.game_version ?? null,
+      sourceVersion: detail.source_version ?? null,
+      dataVersion: detail.data_version ?? pack.data_version ?? null,
+    }
+    if (!game) { sharedPacks.push(summary); continue }
+    const target = datasets[game]
+    target.present = true
+    target.documentCount += Number(summary.documentCount) || 0
+    target.compressedSize += Number(summary.compressedSize) || 0
+    target.packs.push(summary)
+    // 官方游戏导出的版本信息优先于 reviewed knowledge 的构建哈希。
+    if (summary.authority === 'official' || String(summary.authority).includes('official_game')) {
+      target.releaseName = summary.releaseName ?? target.releaseName
+      target.releaseTitle = summary.releaseTitle ?? target.releaseTitle
+      target.gameVersion = summary.gameVersion ?? target.gameVersion
+      target.sourceVersion = summary.sourceVersion ?? target.sourceVersion
+      target.dataVersion = summary.dataVersion ?? target.dataVersion
+    } else {
+      target.releaseName ??= summary.releaseName
+      target.releaseTitle ??= summary.releaseTitle
+      target.gameVersion ??= summary.gameVersion
+      target.sourceVersion ??= summary.sourceVersion
+      target.dataVersion ??= summary.dataVersion
+    }
+  }
+  return { ...datasets, sharedPacks }
+}
+
 async function readLocalReleases(shared, sizeCache = new Map()) {
   const releases = []
   let activeId = null
@@ -147,6 +204,7 @@ async function readLocalReleases(shared, sizeCache = new Map()) {
       createdAt: manifest?.created_at ?? null,
       sizeBytes,
       needsExtract: true, // 本地分片以 .jsonl.gz 存储，打开时需解压
+      datasets: manifest ? await readReleaseDatasets(dir, manifest) : null,
     })
   }
   releases.sort((left, right) => String(right.createdAt ?? '').localeCompare(String(left.createdAt ?? '')))

@@ -1,25 +1,25 @@
 # prts-terrarchive
 
-PRTS.chat 为 DeepSeek Harness（DSH）提供的资料插件：把《明日方舟》的剧情原文、
-官方角色资料、社区整理 Wiki、实体图鉴与《泰拉年表》装进本地资料包，为 Agent 提供
+PRTS.chat 为 DeepSeek Harness（DSH）提供的资料插件：把《明日方舟》与
+《明日方舟：终末地》的官方剧情原文，以及社区整理 Wiki、实体图鉴与《泰拉年表》装进本地资料包，为 Agent 提供
 带官方行号的检索与引用工具，并可按需接入 PRTS.chat 云端混合检索与 DSH 原生网页工具。
 
 [中文](README.md) | [English](README.en.md)
 
 ## 这是什么
 
-本插件为 DSH 提供《明日方舟》资料检索能力。用户从 ModelScope 下载本地语料后，
+本插件为 DSH 提供明日方舟与终末地联合资料检索能力。用户从 ModelScope 下载本地语料后，
 Agent 可以离线检索并按官方行号阅读原文；可选的 PRTS.chat 云端混合检索用于发现
 候选材料，并将结果映射回本地原文核验。由于云端服务承载能力有限，当前为每个 DSH
 实例提供 1000 次匿名调用额度（按实例累计）；额度策略可能根据实际运行情况调整。
-- **本地检索**：`corpus_search` 在 14000+ 篇文档上做 grep 风格检索，
-  支持资料类型、角色、活动、Wiki 字段等结构化过滤；
+- **本地检索**：`corpus_search` 用同一组参数同时检索两款游戏，
+  支持游戏、资料类型、内容形式、角色、活动／任务、Wiki 字段等结构化过滤；
 - **原文阅读**：`corpus_read` 按「活动 · 章节代码 · 篇名 · 行动前后」
   的自然标题 + 官方行号直读原文，引用格式统一为《篇章名》第 N 行；
 - **活动时间线**：`timeline_search` 检索 PRTS Wiki《泰拉年表》本地投影，
   支持实体别名自动裂变与出处标记反查；
-- **云端混合检索**：`cloud_search` / `cloud_inspect` 接入 PRTS.chat 的
-  图谱、档案、原文、Wiki 组合索引，结果自动映射回本地篇章；
+- **云端混合检索**：一次 `cloud_search` 默认并行查询两款游戏的图谱、档案、
+  原文与 Wiki，联合排序后映射回本地篇章；
 ## 核心特性
 
 | 特性 | 说明 |
@@ -32,7 +32,7 @@ Agent 可以离线检索并按官方行号阅读原文；可选的 PRTS.chat 云
 
 - Node.js **≥ 22.19**
 - DSH 运行时 **≥ 0.1.2-alpha.1**（已验证安全 `web_fetch` provider 与插件完整加载）
-- 磁盘空间：资料包约 **322 MiB**（+ 解压缓存）
+- 磁盘空间：以 release 清单为准；当前双游戏资料约 **330 MiB**（+ 解压缓存）
 
 > `0.1.2-alpha.1` 可用于桌面整合包或从官方 tag 构建，但该版本未发布到 npm。
 > 通过 npm 安装 DSH 时请使用 `0.1.2-alpha.2` 或更新版本。
@@ -80,7 +80,7 @@ npx --yes prts-terrarchive@next desktop
 
 1. **重启** `dsh web`；
 2. **设置 → 插件 →「PRTS 语料」**：选择皮肤（Harness 默认 / PRTS Agent / Endfield AIC）；Endfield AIC 的模型与贴图已随插件包安装，切换皮肤不会触发额外下载；
-3. **版本管理**：下载资料（约 322 MiB，优先 ModelScope 镜像）。资料未安装或本地
+3. **版本管理**：下载双游戏资料（约 330 MiB，优先 ModelScope 镜像）。资料未安装或本地
    索引、实体别名自动机仍在准备时，模式下拉会保留但锁住 PRTS，并显示恢复路径；
 4. **新建会话，顶部模式下拉选「PRTS 模式」**；
 5. 直接用自然语言提问，或让模型调用下列工具。
@@ -108,6 +108,10 @@ npx --yes prts-terrarchive@next desktop
 | 参数 | 说明 |
 | --- | --- |
 | `query` | 搜索词（≤512 码点）；在 NFKC 归一化 + 小写后的文本上匹配 |
+| `games` | 可选游戏过滤；省略时同时搜索 `arknights` 与 `endfield` |
+| `resource_types` | 跨游戏统一资料类型，例如 `original_story`、`wiki` |
+| `content_types` | 内容形式，例如 `dialogue`、`cutscene`、`radio`、`sns_chat` |
+| `collection_names` | 明日方舟活动名或终末地任务名，使用同一个字段 |
 | `match_mode` | `literal`（默认，连续字面匹配）/ `regex`（受限正则，拒绝高风险回溯结构） |
 | `resource_types` | 资料类型过滤（见下表，数组内 OR） |
 | `character_names` / `story_names` / `activity_names` | 角色 / 篇章 / 活动展示名过滤 |
@@ -138,7 +142,7 @@ npx --yes prts-terrarchive@next desktop
 | 定点上下文 | `title` + `line`（around 模式，默认前后各 3 行，`before`/`after` 可调 0–100） |
 | 读 Wiki 字段 | `title` + `section`（精确读取标签字段，不含标签行） |
 | 分页读全文 | `title` + `mode: "document"`（`max_lines` 默认 100、上限 500；`max_chars` 默认 12000、上限 100000） |
-| 续页 | 只提交 `cursor`（可重复附带与游标一致的 `max_lines`/`max_chars`，其他参数不能同时提交） |
+| 续读 | 使用上次结果给出的完整 `title` 与下一行 `line`；旧会话里的 `cursor` 仅保留兼容 |
 
 引用格式统一为「《篇章名》第 N 行」。剧情文档只返回请求的原文；剧情总结与活动
 时间线必须通过 `timeline_search` 或 Wiki 字段显式检索，不自动夹带。
@@ -212,7 +216,7 @@ Wiki 资料不是无差别文本池：工具会区分规范角色页、活动/�
 | `cloudEnabled` | `false` | 云端工具开关 |
 | `cloudBaseUrl` | `https://prts.chat` | 云端地址（https，或仅环回主机的 http） |
 | `cloudToken` | 空 | 静态 Bearer token；留空使用匿名 PoW 会话 |
-| `cloudGame` | `arknights` | `arknights` / `endfield` |
+| `cloudGame` | `all` | `all`（一次检索两款游戏）/ `arknights` / `endfield` |
 | `cloudUserId` | 空 | 匿名会话的稳定用户标识 |
 | `cloudTimeoutMs` | `90000` | 云端请求超时（1000–600000） |
 | `cloudMaxResponseBytes` | 32 MiB | 云端响应上限（1 KiB–256 MiB） |
