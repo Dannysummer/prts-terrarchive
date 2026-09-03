@@ -475,6 +475,12 @@ test('client bundle：ModuleLoader 工厂产出插件并注册皮肤设置与 PR
     '侧栏不再挂载重复且容易误报的资料状态卡')
   assert.doesNotMatch(source, /grid-template-rows:20px 17px/,
     '会话行不能强制改成两行 grid，否则运行状态会与标题重叠')
+  assert.match(source, /document\.addEventListener\('visibilitychange', syncMapActivity\)/,
+    '终末地地图必须在页面不可见时停止渲染')
+  assert.match(source, /globalThis\.addEventListener\('prts-shell-visibility', syncMapActivity\)/,
+    '便携桌面进入托盘时必须显式通知终末地地图')
+  assert.match(source, /if \(pageIsActive\(\)\) map\.resume\?\.\(\)[^]*else map\.pause\?\.\(\)/,
+    '地图后台状态必须映射到运行时 pause/resume')
   assert.match(source, />span:nth-child\(1\)>span:not\(\[data-state\]\).*clip-path:inset\(50%\)/s,
     '会话状态的 screen-reader 文本必须保持视觉隐藏')
   let entry = null
