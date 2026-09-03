@@ -160,7 +160,12 @@ async function currentReleaseReady(releasesDir, requested, requireRelease) {
     const releaseId = String(pointer.release_id ?? '')
     if (!RELEASE_ID_PATTERN.test(releaseId) || (requireRelease && releaseId !== requested)) return false
     const manifest = JSON.parse(await readFile(join(releasesDir, releaseId, 'release-manifest.json'), 'utf8'))
-    return manifest.release_id === releaseId && SHA256_PATTERN.test(String(manifest.data_version ?? ''))
+    if (manifest.release_id !== releaseId || !SHA256_PATTERN.test(String(manifest.data_version ?? ''))
+        || !Number.isInteger(manifest.document_count) || manifest.document_count <= 0
+        || !Array.isArray(manifest.required_packs) || !manifest.required_packs.length
+        || !Array.isArray(manifest.packs)) return false
+    const packIds = new Set(manifest.packs.map((pack) => String(pack?.pack_id || '')))
+    return manifest.required_packs.every((packId) => packIds.has(packId))
   } catch {
     return false
   }
@@ -589,6 +594,10 @@ export async function ensureCorpusRelease(options) {
       const packs = [...new Set(listing.entries.map((entry) => entry.relativePath.split('/')[0]))]
         .filter((packId) => PACK_IDS.includes(packId))
         .map((packId) => ({ pack_id: packId, manifest_path: `${packId}/pack-manifest.json` }))
+      const packManifests = await Promise.all(packs.map(async (pack) => JSON.parse(await readFile(
+        join(releaseDir, pack.manifest_path), 'utf8'))))
+      const sumIntegerField = (field) => packManifests.reduce((sum, pack) =>
+        sum + (Number.isInteger(pack[field]) ? pack[field] : 0), 0)
       await mkdir(releaseDir, { recursive: true })
       const releaseManifestPath = join(releaseDir, 'release-manifest.json')
       let releaseManifestValid = false
@@ -596,6 +605,8 @@ export async function ensureCorpusRelease(options) {
         const existingManifest = JSON.parse(await readFile(releaseManifestPath, 'utf8'))
         releaseManifestValid = existingManifest.release_id === releaseId
           && existingManifest.data_version === listing.dataVersion
+          && Number.isInteger(existingManifest.document_count) && existingManifest.document_count > 0
+          && Array.isArray(existingManifest.required_packs) && existingManifest.required_packs.length > 0
       } catch { /* 缺失或旧版清单：下方原子替换 */ }
       if (!releaseManifestValid) {
         const manifestTemp = `${releaseManifestPath}.${randomBytes(6).toString('hex')}.tmp`
@@ -603,6 +614,10 @@ export async function ensureCorpusRelease(options) {
           algorithm: 'prts-browser-corpus-release-v1',
           release_id: releaseId, data_version: listing.dataVersion,
           schema_version: 1, source, packs,
+          required_packs: packs.map((pack) => pack.pack_id),
+          document_count: sumIntegerField('document_count'),
+          line_count: sumIntegerField('line_count'),
+          compressed_size: sumIntegerField('compressed_size'),
         }, null, 2))
         await rename(manifestTemp, releaseManifestPath)
       }

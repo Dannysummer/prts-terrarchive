@@ -49,11 +49,13 @@ function buildSources({ modelscope404 = false, corruptModelscope = false, corrup
   const packManifests = {
     official_game: {
       pack_id: 'official_game', data_version: 'b'.repeat(64),
+      document_count: 1, line_count: 1, compressed_size: officialShard.length,
       shards: [{ path: 'shards/00000.jsonl.gz', sha256: sha256(officialShard), compressed_size: officialShard.length }],
       search_index: { shards: [] },
     },
     references: {
       pack_id: 'references', data_version: 'c'.repeat(64),
+      document_count: 1, line_count: 1, compressed_size: communityShard.length,
       shards: [{ path: 'shards/00000.jsonl.gz', sha256: sha256(communityShard), compressed_size: communityShard.length }],
       search_index: { shards: [] },
     },
@@ -318,6 +320,8 @@ test('requireRelease：手动指定版本不被其他当前版本短路', async 
     await mkdir(join(dir, other), { recursive: true })
     await writeFile(join(dir, other, 'release-manifest.json'), JSON.stringify({
       release_id: other, data_version: 'f'.repeat(64),
+      document_count: 1, required_packs: ['references'],
+      packs: [{ pack_id: 'references', manifest_path: 'references/pack-manifest.json' }],
     }))
     await writeFile(join(dir, 'current.json'), JSON.stringify({ release_id: other }))
     const { fetchImpl, counters } = buildSources()
