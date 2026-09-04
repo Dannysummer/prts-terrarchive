@@ -118,9 +118,8 @@ body[data-prts-skin="endfield-aic"] [data-slot="conversation"] pre {
 }
 
 body[data-prts-skin="endfield-aic"] [data-slot="conversation.composer.bar"]>div {
-   border-color: rgba(255, 255, 255, .18) !important;
-   background: rgba(10, 13, 15, .96) !important;
-   box-shadow: none !important
+   box-shadow: none !important;
+   margin-bottom: 0px;
 }
 
 body[data-prts-skin="endfield-aic"] [data-slot="conversation.input.model"] button,
@@ -1774,4 +1773,92 @@ html.prts-running button[aria-label^="停止生成"] {
 }
 @media (prefers-reduced-motion: reduce){
   html.prts-running button[aria-label="停止生成"], html.prts-running button[aria-label^="停止生成"] { animation:none !important }
+}
+
+/* B1) 输入区整体玻璃卡（含会话'hero'+ 有历史两条都覆盖） */
+body[data-prts-skin='endfield-aic'] [data-phase='hero'] [data-composer-card],
+body[data-prts-skin='endfield-aic'] [data-composer-card] {
+  border: 1px solid rgba(250, 255, 63, .35) !important;   /* 想要黄描边常亮调这里 / .35用白则改回 */
+  background: rgba(13, 16, 18, .82) !important;
+  border-radius: 15px 15px 0 0!important;                          /* 想要圆角 */
+  box-shadow: 0 6px 24px rgba(0,0,0,.25) !important;
+  transition: all 0.1s ease-in-out;
+}
+
+body[data-prts-skin='endfield-aic'] [data-phase='hero'] [data-composer-card]:focus,
+body[data-prts-skin='endfield-aic'] [data-composer-card]:focus {
+  border-color: rgba(250, 255, 63, .8) !important;        /* 想强→ .9 / .1=淡 */
+  box-shadow: 0 0 0 2px rgba(250, 255, 63, .18) !important;
+  outline: none !important;
+}
+
+/* A) 真正的多行输入框 */
+body[data-prts-skin='endfield-aic'] textarea,
+body[data-prts-skin='endfield-aic'] [contenteditable='true'] {
+  background: rgba(9, 12, 14, .9) !important;
+  min-height: 46px !important;                            /* 起步高度 */
+  border-radius: 4px !important;
+  font-size: 13px !important;
+  color: #f2f3ef !important;
+}
+/* A-focus: 点进输入框时的高亮(黄)边框——你'记忆的黄框'很可能在这 */
+body[data-prts-skin='endfield-aic'] textarea:focus,
+body[data-prts-skin='endfield-aic'] [contenteditable='true']:focus {
+  border-color: rgba(250, 255, 63, .8) !important;        /* 想强→ .9 / .1=淡 */
+  box-shadow: 0 0 0 2px rgba(250, 255, 63, .18) !important;
+  outline: none !important;
+}
+
+/* C) 若你指底部那根分隔条(而非卡片)：把它换酸黄 1px */
+body[data-prts-skin='endfield-aic'] .aic-composer {
+  border-top: 1px solid rgba(250, 255, 63, .25) !important;
+}
+/* 卡片内含输入被 focus → 卡片整体亮起(这是“focus 时变亮”的正解) */
+body[data-prts-skin='endfield-aic'] [data-composer-card]:focus-within {
+  border-color: rgba(250, 255, 63, .95) !important;
+  box-shadow: 0 0 0 2px rgba(250,255,63,.22), 0 8px 32px rgba(0,0,0,.38) !important;
+  border-radius: 15px 15px 0 0 !important;
+  transition: all 0.1s ease-in-out;
+}
+
+/* dock 贴 composer-card 内部下沿（定位于卡） */
+body[data-prts-skin="endfield-aic"] [data-phase="hero"] [data-composer-card],
+body[data-prts-skin="endfield-aic"] [data-composer-card] {
+  position: relative !important;
+  margin-bottom: -55px;
+  padding-bottom: 55px !important;   /* 底部给 dock 留位(高度)，dock 高会覆盖 */
+  border-bottom: none!important;
+}
+body[data-prts-skin="endfield-aic"] [data-slot="conversation.composer.dock"] {
+  position: relative !important;
+  transform: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  box-sizing: border-box !important;
+  width: 95% !important;
+  padding: 3px 12px !important;
+  border-top: 1px solid rgba(250,255,63,.15) !important;
+  background: transparent !important;
+  color: rgba(238,240,235,.7) !important;
+  font: 10px/1.6 ui-monospace,monospace !important;
+  margin-top: 4px;
+}
+/* 若发现 dock 压住了(它该有自己 26px 高)可把 card padding-bottom 调成 dock 高度一致。 */
+#root > div > div > main > div > div > div.uPhUma_body > div.uPhUma_scrollBody > div.uPhUma_composerSeat > div > div > div > div:nth-child(2) > div > div:nth-child(2) > div{
+   padding: 11px calc(var(--dsh-composer-side-clearance) + 16px) 0px;
+}
+
+/*
+
+/* 两种模式刻意不一致：
+   兼容(无 AIC)/默认 → 30px; 
+   增强 AIC(endfield) → 覆盖为 0。
+   判定靠 body[data-prts-skin='endfield-aic'] 特异性更高+靠后 → 0 赢。 */
+[data-slot="conversation.composer.bar"]>div {
+  margin-bottom: 30px !important;
+}
+body[data-prts-skin="endfield-aic"] [data-slot="conversation.composer.bar"]>div {
+  margin-bottom: 0 !important;
 }
