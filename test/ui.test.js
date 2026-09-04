@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { gzipSync } from 'node:zlib'
+import { brotliDecompressSync, gzipSync } from 'node:zlib'
 import vm from 'node:vm'
 import { createSharedState, redactConfig } from '../src/state.js'
 import { buildApi, applyUi } from '../src/ui.js'
@@ -604,4 +604,21 @@ test('client bundle：ModuleLoader 工厂产出插件并注册皮肤设置与 PR
   assert.equal(themeLayers.length, 1)
   assert.equal(themeLayers[0].source, 'prts-terrarchive:prts-agent-skin')
   assert.deepEqual(Object.keys(themeLayers[0].tokens['--dsw-alias-bg-base']).sort(), ['dark', 'light'])
+})
+
+test('AIC skin：同步雪松林地图并规避 macOS 设置弹窗的 WebGL 合成卡顿', async () => {
+  const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(client, /new MutationObserver\(syncMapActivity\)/)
+  assert.match(client, /!document\.querySelector\('\[aria-modal="true"\]\[role="dialog"\]'\)/)
+  assert.match(client, /\[role="presentation"\]>\[aria-hidden="true"\].*backdrop-filter:none!important/s)
+  assert.match(client, /overflow:visible!important;pointer-events:none/)
+  assert.match(client, /aic-chat-resize/)
+
+  const mapBundle = brotliDecompressSync(await readFile(
+    new URL('../lib/endfield-map/map.js.br', import.meta.url),
+  )).toString('utf8')
+  assert.match(mapBundle, /Snowy Forest/)
+  assert.match(mapBundle, /lv009/)
+  assert.match(mapBundle, /map-00b0d0744a1b4404/)
+  assert.match(mapBundle, /\/prts-corpus\/endfield-map\/resources\//)
 })

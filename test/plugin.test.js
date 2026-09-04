@@ -102,6 +102,17 @@ test('未安装资料时仍可挂载 preset，本地工具统一提示用户前�
   }
 })
 
+test('Host UI 同时等待 connection 与 webServer，避免 AIC 地图路由漏挂', async () => {
+  const plugin = await import('../src/index.js')
+  const dependencies = []
+  await plugin.apply({
+    inject: (required) => { dependencies.push(required) },
+    effect: () => () => {},
+    logger: { warn: () => {}, info: () => {} },
+  }, { registerTools: false, registerUi: true })
+  assert.deepEqual(dependencies, [['connection', 'webServer']])
+})
+
 test('默认配置注册本地三工具（search/read/timeline），schema 在 DSH 支持子集内', async () => {
   const plugin = await import('../src/index.js')
 

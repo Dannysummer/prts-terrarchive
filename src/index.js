@@ -716,10 +716,12 @@ export async function apply(ctx, config = {}) {
     }, 'prts-corpus: release watch')
   }
 
-  // 设置页 API（connection 为可选服务；headless profile 不挂载）。
+  // 设置页 API 与 AIC 地图静态资源（connection/webServer 为可选服务；
+  // headless profile 不挂载）。必须把两项都注入子上下文；只等待 connection
+  // 时，隔离服务拓扑中 applyUi 看不到 webServer，浏览器能加载插件却会让地图 404。
   // host 常驻（registerUi 缺省 true）注册 /api/prts-corpus + 设置 tab 数据源；
   // PRTS 预设（registerUi:false）只注册工具，避免与 host 重复注册同名前缀路由。
   if (config.registerUi !== false) {
-    ctx.inject(['connection'], (connectionCtx) => { applyUi(connectionCtx, shared) })
+    ctx.inject(['connection', 'webServer'], (webCtx) => { applyUi(webCtx, shared) })
   }
 }
