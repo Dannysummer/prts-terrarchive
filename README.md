@@ -109,11 +109,10 @@ npx --yes prts-terrarchive@next desktop
 | --- | --- |
 | `query` | 搜索词（≤512 码点）；在 NFKC 归一化 + 小写后的文本上匹配 |
 | `games` | 可选游戏过滤；省略时同时搜索 `arknights` 与 `endfield` |
-| `resource_types` | 跨游戏统一资料类型，例如 `original_story`、`wiki` |
+| `resource_types` | 资料类型过滤（数组内 OR）；明日方舟与终末地可选值见下文 |
 | `content_types` | 内容形式，例如 `dialogue`、`cutscene`、`radio`、`sns_chat` |
 | `collection_names` | 明日方舟活动名或终末地任务名，使用同一个字段 |
 | `match_mode` | `literal`（默认，连续字面匹配）/ `regex`（受限正则，拒绝高风险回溯结构） |
-| `resource_types` | 资料类型过滤（见下表，数组内 OR） |
 | `character_names` / `story_names` / `activity_names` | 角色 / 篇章 / 活动展示名过滤 |
 | `entity_names` | 只返回出现指定实体的行（自动展开别名） |
 | `speakers` | 结构化说话人过滤，只匹配亲口台词 |
@@ -125,12 +124,17 @@ npx --yes prts-terrarchive@next desktop
 保留原搜索条件，并把返回的 `next_after` 原样放入 `after`，可确定性扫描到
 `exhausted=true`。锚点使用资料类型和自然标题，不向模型暴露内部签名串。
 
-**资料类型（resource_types）**：`story` 官方剧情原文；`character_profile` 档案/招聘/
+**明日方舟资料类型（resource_types）**：`story` 官方剧情原文；`character_profile` 档案/招聘/
 潜能；`character_module` 模组；`character_voice` 语音；`character_skin` 时装；
 `operator_record` 干员密录；`character_bundle` 指定角色的档案+模组+语音+密录；
 `character_wiki` 规范角色 Wiki；`story_wiki` 活动/密录 Wiki；
 `character_activity_wiki` 角色×活动辅助 Wiki；`reviewed_wiki` 全部自建 Wiki；
 `terra_journey` 大地巡旅；`entity_profile` 实体资料；`reference` 时间线等引用资料。
+
+**终末地资料类型**：`original_story` 官方剧情原文；`archive` 官方档案；
+`knowledge` 知识资料；`wiki` 整理性 Wiki；`character_story` 角色故事；
+`timeline` 时间线资料；`entity_profile` 实体资料。可配合 `content_types` 区分对话、
+过场、广播、通讯、环境对话、SNS 等内容形式。
 
 ### corpus_read — 原文阅读
 
@@ -142,7 +146,7 @@ npx --yes prts-terrarchive@next desktop
 | 定点上下文 | `title` + `line`（around 模式，默认前后各 3 行，`before`/`after` 可调 0–100） |
 | 读 Wiki 字段 | `title` + `section`（精确读取标签字段，不含标签行） |
 | 分页读全文 | `title` + `mode: "document"`（`max_lines` 默认 100、上限 500；`max_chars` 默认 12000、上限 100000） |
-| 续读 | 使用上次结果给出的完整 `title` 与下一行 `line`；旧会话里的 `cursor` 仅保留兼容 |
+| 续读 | 原样提交上次结果的 `page.continuation`：完整 `title` + `mode: "document"` + 下一行 `line`；旧会话里的 `cursor` 仅保留兼容 |
 
 引用格式统一为「《篇章名》第 N 行」。剧情文档只返回请求的原文；剧情总结与活动
 时间线必须通过 `timeline_search` 或 Wiki 字段显式检索，不自动夹带。
@@ -217,6 +221,7 @@ Wiki 资料不是无差别文本池：工具会区分规范角色页、活动/�
 | `cloudBaseUrl` | `https://prts.chat` | 云端地址（https，或仅环回主机的 http） |
 | `cloudToken` | 空 | 静态 Bearer token；留空使用匿名 PoW 会话 |
 | `cloudGame` | `all` | `all`（一次检索两款游戏）/ `arknights` / `endfield` |
+| `enabledGames` | `["arknights","endfield"]` | 本地与云端工具允许检索的模块；单模块可只保留其中一项，新会话会装配对应 Skill |
 | `cloudUserId` | 空 | 匿名会话的稳定用户标识 |
 | `cloudTimeoutMs` | `90000` | 云端请求超时（1000–600000） |
 | `cloudMaxResponseBytes` | 32 MiB | 云端响应上限（1 KiB–256 MiB） |
@@ -224,6 +229,8 @@ Wiki 资料不是无差别文本池：工具会区分规范角色页、活动/�
 | `downloadSiteBaseUrl` | `https://prts.chat` | 回退站点地址 |
 | `downloadOrder` | `["modelscope","site"]` | 下载源顺序 |
 | `cacheShards` | `8` | 正文分片 LRU 缓存大小（1–128） |
+
+若在 preset 的 `prts-corpus.config.enabledGames` 设置基础范围，也应把相同数组传给相邻的 `prts-terrarchive/skill` entry；安装器生成和迁移的官方 PRTS preset 已自动保持两者一致。用户配置文件中的 `enabledGames` 会同时覆盖两边，修改后请新建会话以装配新的模块说明。
 
 **内存说明**：本地索引准备时会把篇章定位、标题、别名和检索元数据保留在进程内存，
 避免每次工具调用重新扫描压缩分片（本机实测首建索引约 10 秒量级，后台进行）；正文
@@ -245,8 +252,8 @@ Endfield AIC 的插件代码、UI 集成与地图渲染实现采用 MIT License�
 
 ```bash
 npm run check        # 全部源码语法检查
-npm test             # node --test 全量测试（93 项，需本地资料包 data/releases）
-npm pack --dry-run   # 检查发布产物（142 个文件）
+npm test             # node --test 全量测试；语料集成用例需本地 data/releases，否则自动跳过
+npm pack --dry-run   # 检查实际发布文件清单与包体积
 ```
 
 真实网络下载脚本 `test/real-download.mjs` 不在默认测试集中，避免单元测试意外

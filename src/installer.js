@@ -60,6 +60,10 @@ export const RELEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const SHA256_PATTERN = /^[0-9a-f]{64}$/
 const PACK_IDS = ['official_game', 'endfield_official_game', 'endfield_reviewed_knowledge',
   'reviewed_wiki', 'terra_journey', 'entities', 'references']
+const REQUIRED_GAME_PACK = Object.freeze({
+  arknights: 'official_game',
+  endfield: 'endfield_official_game',
+})
 const ASSET_PATH_PATTERN = /^(?:shards\/[A-Za-z0-9._-]+\.jsonl|search-index\/[A-Za-z0-9._-]+\.bin)\.gz$/
 const MODELSCOPE_FILE_PATTERN = (releaseId) =>
   new RegExp(`^releases/${releaseId}/(?:${PACK_IDS.join('|')})/(?:pack-manifest\\.json|(?:shards/[A-Za-z0-9._-]+\\.jsonl|search-index/[A-Za-z0-9._-]+\\.bin)\\.gz)$`)
@@ -159,13 +163,8 @@ async function currentReleaseReady(releasesDir, requested, requireRelease) {
     const pointer = JSON.parse(await readFile(join(releasesDir, 'current.json'), 'utf8'))
     const releaseId = String(pointer.release_id ?? '')
     if (!RELEASE_ID_PATTERN.test(releaseId) || (requireRelease && releaseId !== requested)) return false
-    const manifest = JSON.parse(await readFile(join(releasesDir, releaseId, 'release-manifest.json'), 'utf8'))
-    if (manifest.release_id !== releaseId || !SHA256_PATTERN.test(String(manifest.data_version ?? ''))
-        || !Number.isInteger(manifest.document_count) || manifest.document_count <= 0
-        || !Array.isArray(manifest.required_packs) || !manifest.required_packs.length
-        || !Array.isArray(manifest.packs)) return false
-    const packIds = new Set(manifest.packs.map((pack) => String(pack?.pack_id || '')))
-    return manifest.required_packs.every((packId) => packIds.has(packId))
+    const manifest = await validateLocalRelease(releasesDir, releaseId)
+    return !pointer.data_version || pointer.data_version === manifest.data_version
   } catch {
     return false
   }
@@ -178,6 +177,13 @@ export class InstallerFault extends Error {
   }
 }
 
+/** 返回当前 release 相对启用游戏所缺的官方资料包。 */
+export function missingEnabledGamePacks(manifest, enabledGames = []) {
+  const packs = new Set((manifest?.packs || []).map((pack) => String(pack?.pack_id || '')))
+  return [...new Set(enabledGames)].filter((game) => REQUIRED_GAME_PACK[game]
+    && !packs.has(REQUIRED_GAME_PACK[game]))
+}
+
 async function sha256File(path) {
   return new Promise((resolve, reject) => {
     const hash = createHash('sha256')
@@ -185,6 +191,69 @@ async function sha256File(path) {
       .on('error', reject)
       .on('end', () => resolve(hash.digest('hex')))
   })
+}
+
+/**
+ * 验证一个本地 release 的结构和分片。普通启动只检查结构与文件大小；显式
+ * 激活额外校验 SHA-256，避免把中断下载或人工拼接目录写入 current.json。
+ */
+export async function validateLocalRelease(releasesDir, releaseId, { verifyHashes = false } = {}) {
+  if (!RELEASE_ID_PATTERN.test(String(releaseId || ''))) {
+    throw new InstallerFault('INVALID_RELEASE', 'releaseId 非法')
+  }
+  const releaseDir = join(releasesDir, releaseId)
+  const manifest = JSON.parse(await readFile(join(releaseDir, 'release-manifest.json'), 'utf8'))
+  if (manifest.release_id !== releaseId || !SHA256_PATTERN.test(String(manifest.data_version ?? ''))
+      || !Number.isInteger(manifest.document_count) || manifest.document_count <= 0
+      || !Array.isArray(manifest.required_packs) || !manifest.required_packs.length
+      || !Array.isArray(manifest.packs) || !manifest.packs.length) {
+    throw new InstallerFault('INVALID_RELEASE', 'release-manifest 内容不完整或与 releaseId 不匹配')
+  }
+  const descriptors = new Map()
+  for (const pack of manifest.packs) {
+    const packId = requirePackId(String(pack?.pack_id || ''))
+    if (descriptors.has(packId) || pack?.manifest_path !== `${packId}/pack-manifest.json`) {
+      throw new InstallerFault('INVALID_RELEASE', `release pack 描述非法: ${packId}`)
+    }
+    descriptors.set(packId, pack)
+  }
+  for (const required of manifest.required_packs) {
+    const packId = requirePackId(String(required || ''))
+    if (!descriptors.has(packId)) {
+      throw new InstallerFault('INVALID_RELEASE', `缺少 required pack: ${packId}`)
+    }
+  }
+  for (const packId of manifest.required_packs) {
+    const packPath = join(releaseDir, packId, 'pack-manifest.json')
+    const pack = JSON.parse(await readFile(packPath, 'utf8'))
+    if (pack.pack_id != null && pack.pack_id !== packId) {
+      throw new InstallerFault('INVALID_RELEASE', `pack-manifest 与目录不匹配: ${packId}`)
+    }
+    if (!Number.isInteger(pack.document_count) || pack.document_count <= 0
+        || !Array.isArray(pack.shards) || !pack.shards.length) {
+      throw new InstallerFault('INVALID_RELEASE', `pack-manifest 内容不完整: ${packId}`)
+    }
+    const assets = [...pack.shards,
+      ...(Array.isArray(pack.search_index?.shards) ? pack.search_index.shards : [])]
+    for (const asset of assets) {
+      const relative = String(asset?.path || '')
+      const expectedSize = Number(asset?.compressed_size)
+      const expectedHash = String(asset?.sha256 || '')
+      if (!ASSET_PATH_PATTERN.test(relative) || !Number.isInteger(expectedSize) || expectedSize < 0
+          || !SHA256_PATTERN.test(expectedHash)) {
+        throw new InstallerFault('INVALID_RELEASE', `分片描述非法: ${packId}/${relative}`)
+      }
+      const assetPath = join(releaseDir, packId, relative)
+      const info = await stat(assetPath)
+      if (!info.isFile() || info.size !== expectedSize) {
+        throw new InstallerFault('INVALID_RELEASE', `分片缺失或大小不符: ${packId}/${relative}`)
+      }
+      if (verifyHashes && await sha256File(assetPath) !== expectedHash) {
+        throw new InstallerFault('INVALID_RELEASE', `分片 SHA-256 不符: ${packId}/${relative}`)
+      }
+    }
+  }
+  return manifest
 }
 
 async function fetchJson(url, { fetchImpl, signal }) {
@@ -549,8 +618,6 @@ export async function ensureCorpusRelease(options) {
           if (entry.sha256) {
             // 哈希与大小都一致 → 已就绪跳过；否则重新下载覆盖
             if (existing.size === entry.size && await sha256File(targetPath) === entry.sha256) continue
-          } else if (existing.size > 0) {
-            continue // 源未提供哈希的清单文件：已存在即跳过
           }
         } catch { /* 不存在 → 下载 */ }
         pending.push(entry)
@@ -600,27 +667,18 @@ export async function ensureCorpusRelease(options) {
         sum + (Number.isInteger(pack[field]) ? pack[field] : 0), 0)
       await mkdir(releaseDir, { recursive: true })
       const releaseManifestPath = join(releaseDir, 'release-manifest.json')
-      let releaseManifestValid = false
-      try {
-        const existingManifest = JSON.parse(await readFile(releaseManifestPath, 'utf8'))
-        releaseManifestValid = existingManifest.release_id === releaseId
-          && existingManifest.data_version === listing.dataVersion
-          && Number.isInteger(existingManifest.document_count) && existingManifest.document_count > 0
-          && Array.isArray(existingManifest.required_packs) && existingManifest.required_packs.length > 0
-      } catch { /* 缺失或旧版清单：下方原子替换 */ }
-      if (!releaseManifestValid) {
-        const manifestTemp = `${releaseManifestPath}.${randomBytes(6).toString('hex')}.tmp`
-        await writeFile(manifestTemp, JSON.stringify({
-          algorithm: 'prts-browser-corpus-release-v1',
-          release_id: releaseId, data_version: listing.dataVersion,
-          schema_version: 1, source, packs,
-          required_packs: packs.map((pack) => pack.pack_id),
-          document_count: sumIntegerField('document_count'),
-          line_count: sumIntegerField('line_count'),
-          compressed_size: sumIntegerField('compressed_size'),
-        }, null, 2))
-        await rename(manifestTemp, releaseManifestPath)
-      }
+      const manifestTemp = `${releaseManifestPath}.${randomBytes(6).toString('hex')}.tmp`
+      await writeFile(manifestTemp, JSON.stringify({
+        algorithm: 'prts-browser-corpus-release-v1',
+        release_id: releaseId, data_version: listing.dataVersion,
+        schema_version: 1, source, packs,
+        required_packs: packs.map((pack) => pack.pack_id),
+        document_count: sumIntegerField('document_count'),
+        line_count: sumIntegerField('line_count'),
+        compressed_size: sumIntegerField('compressed_size'),
+      }, null, 2))
+      await rename(manifestTemp, releaseManifestPath)
+      await validateLocalRelease(releasesDir, releaseId)
       const pointerTemp = join(releasesDir, `current.json.${randomBytes(6).toString('hex')}.tmp`)
       await writeFile(pointerTemp, JSON.stringify({
         release_id: releaseId, data_version: listing.dataVersion,

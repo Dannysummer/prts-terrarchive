@@ -10,6 +10,10 @@ test('证据状态按 Agent 隔离并对候选、映射做有界去重', () => {
   const state = registry.forExecution({ agent })
   assert.equal(registry.forExecution({ agent }), state)
   assert.notEqual(registry.forExecution({ agent: {} }), state)
+  const execution = {}
+  assert.equal(registry.forExecution(execution), registry.forExecution(execution))
+  assert.notEqual(registry.forExecution({}), registry.forExecution({}),
+    '缺少 Agent 时不同执行对象不得共享证据状态')
 
   rememberSearchCandidates(state, { documents: [{ title: '测试',
     matches: [{ line_start: 2 }] }] })

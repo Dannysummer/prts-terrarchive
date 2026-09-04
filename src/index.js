@@ -44,8 +44,8 @@ import { combinePartialReadResponses, coveredRead, createEvidenceStateRegistry,
   planReadCoverage, rememberCloudMappings, rememberRead,
   rememberSearchCandidates, replayCoveredRead, resolveReadWindow,
   visibleToolResults } from './evidence-state.js'
-import { applyEntityRecognition, isEntityRecognitionReady,
-  prepareEntityRecognition } from './entity-recognizer.js'
+import { applyEntityRecognition } from './entity-recognizer.js'
+import { attachRetravelerRelations } from './entity-routing.js'
 import { WIKI_SECTION_VALUES } from './wiki.js'
 
 /** Cordis 插件名（Loader 诊断用，与 npm 包名 prts-terrarchive 相互独立）。 */
@@ -54,9 +54,23 @@ export const name = 'prts-corpus'
 /** 同一 Host 进程中，host 常驻实例与会话 preset 共用一份大型索引。 */
 const storesByDirectory = new Map()
 
+const LOCAL_CORPUS_MISSING_MESSAGE =
+  '本地数据包暂未安装，请提醒用户前往“设置 → 插件 → PRTS 语料”安装。'
+
+/** Convert local release/index failures into one actionable model-facing error. */
+async function requireLocalCorpus(store) {
+  try {
+    await store.ready()
+  } catch (error) {
+    throw Object.assign(new Error(LOCAL_CORPUS_MISSING_MESSAGE), {
+      code: 'CORPUS_NOT_INSTALLED', retryable: false, cause: error,
+    })
+  }
+}
+
 const READ_DESCRIPTION = [
   '按完整自然语言标题读取 PRTS.chat 本地资料；title + line 扩大原文上下文，title + section 读取 Wiki 字段，title + mode=document 分页阅读全文。',
-  '继续阅读时使用上次结果给出的完整 title 和下一行 line，不要生成或复述内部 cursor。旧会话里的 cursor 仅用于兼容，可以同时带正确的 title 和新的 max_lines/max_chars。剧情标题使用“活动 · 章节代码 · 篇名 · 行动前后”，不使用内部 ID、ref 或路径。',
+  '继续阅读全文时原样提交 page.continuation（完整 title、mode=document 和下一行 line），不要生成或复述内部 cursor。旧会话里的 cursor 仅用于兼容，可以同时带正确的 title 和新的 max_lines/max_chars。剧情标题使用“活动 · 章节代码 · 篇名 · 行动前后”，不使用内部 ID、ref 或路径。',
   '引用原文使用“《篇章名》第 N 行”；不要使用内部代号、路径或自造篇章名。',
 ].join(' ')
 
@@ -185,6 +199,12 @@ const SEARCH_OUTPUT_SCHEMA = {
         code: { type: 'string' }, game: { type: 'string', enum: ['arknights', 'endfield'] },
         message: { type: 'string' },
       } } },
+    retraveler_relations: { type: 'array', items: { type: 'object', additionalProperties: false,
+      required: ['relation_kind', 'endfield_name', 'relation_status', 'not_alias'], properties: {
+        relation_kind: { type: 'string', enum: ['endfield_retraveler_memory_prototype'] },
+        endfield_name: { type: 'string' }, terra_memory_prototype: { type: 'string' },
+        relation_status: { type: 'string' }, not_alias: { type: 'boolean' },
+      } } },
   },
 }
 
@@ -192,8 +212,8 @@ const READ_PARAMETERS = {
   type: 'object',
   properties: {
     title: { type: 'string', description: '资料完整自然语言展示标题' },
-    line: { type: 'integer', description: '要读取的官方行号；around 模式必填' },
-    mode: { type: 'string', enum: ['document'], description: '只在阅读全文时传 document；title + line 和 title + section 会自动选择读取方式' },
+    line: { type: 'integer', description: 'around 的中心官方行号；与 mode=document 同用时表示续读起始行' },
+    mode: { type: 'string', enum: ['document'], description: '阅读全文或按 page.continuation 续读时传 document；title + line 和 title + section 会自动选择其他读取方式' },
     section: { type: 'string', enum: WIKI_SECTION_VALUES, description: '读取 Wiki 标签字段' },
     before: { type: 'integer', description: 'around 前文行数，默认 3，上限 100' },
     after: { type: 'integer', description: 'around 后文行数，默认 3，上限 100' },
@@ -226,9 +246,9 @@ const READ_OUTPUT_SCHEMA = {
     page: { type: 'object', required: ['returned_lines', 'has_more', 'continuation'],
       properties: { returned_lines: { type: 'integer' }, has_more: { type: 'boolean' },
         continuation: { oneOf: [{ type: 'object', additionalProperties: false,
-          required: ['title', 'line', 'before', 'after'], properties: {
-            title: { type: 'string' }, line: { type: 'integer' }, before: { type: 'integer' },
-            after: { type: 'integer' },
+          required: ['title', 'mode', 'line'], properties: {
+            title: { type: 'string' }, mode: { type: 'string', enum: ['document'] },
+            line: { type: 'integer' },
           } }, { type: 'null' }] } } },
   },
 }
@@ -246,8 +266,6 @@ const TIMELINE_PARAMETERS = {
   },
 }
 
-const CHANNEL_VALUES = ['graph', 'csv', 'vector', 'fallback_raw', 'wiki', 'timeline']
-
 const CLOUD_SEARCH_PARAMETERS = {
   type: 'object', additionalProperties: false, required: ['query'],
   properties: {
@@ -255,83 +273,18 @@ const CLOUD_SEARCH_PARAMETERS = {
     games: { type: 'array', items: { type: 'string', enum: ['arknights', 'endfield'] },
       description: '可选游戏范围；省略时同一次调用同时检索明日方舟与终末地' },
     depth: { type: 'string', enum: ['fast', 'standard', 'deep'],
-      description: '检索深度：fast 轻量意图路由；standard 保证加入 vector；deep 使用 graph、csv、vector。首轮通常省略' },
+      description: '兼容字段；不会改变云端主站的检索路由。回答深度由 Agent 自己的运行模式控制，通常省略' },
     evidence_policy: { type: 'string', enum: ['mixed', 'original_only'],
-      description: 'mixed 保留多种资料；original_only 只让原文类候选进入最终来源。不等于 channels=["vector"]' },
+      description: 'mixed=完整复用 PRTS.chat 主站检索、审核与 Cleaner；original_only=只运行官方剧情原文向量路线' },
     options: {
       type: 'object', additionalProperties: false,
-      description: '高级批量检索控制，用于一次召回一组候选；新意图首轮通常省略',
+      description: '通常省略。只有用户记得一句原文大意且措辞可能不准时，选择官方剧情单句向量路线',
       properties: {
-        channels: { type: 'array', items: { type: 'string', enum: CHANNEL_VALUES },
-          description: '批量搜索时只运行列出的渠道：graph=关系/事件；csv=档案、活动总结、密录；vector=不记得原句时按语义模糊召回原文场景；fallback_raw=广泛兜底原文；wiki=自建 Wiki；timeline=活动时间线。显式 channels 会关闭未列出的渠道' },
-        exclude_channels: { type: 'array', items: { type: 'string', enum: CHANNEL_VALUES },
-          description: '从默认计划排除指定渠道；可选值与 channels 相同，且不能与 channels 重叠' },
-        query_variants: { type: 'array', items: { type: 'string' },
-          description: '一轮批量覆盖最多 8 个保留原意的自然语言查询；每项都必须完整、通顺、可独立理解，不能是关键词堆' },
-        entity_overrides: { type: 'array',
-          description: '仅在实体链接错误且规范实体已确认时覆盖；每项至少填写 text、official_name、label。通常优先 filters.entity_names' },
-        filters: {
-          type: 'object', additionalProperties: false,
-          description: '收窄批量候选：同一字段内 OR，不同字段间 AND。仅使用首轮已确认的人类可读实体、活动、篇章代码或说话人',
-          properties: {
-            entity_names: stringList('规范实体展示名，例如“凯尔希”“玻利瓦尔”'),
-            entity_labels: stringList('实体类型，例如“角色”“国家”“组织”“地点”“活动”'),
-            activities: stringList('活动展示名，例如“孤星”'),
-            story_codes: stringList('用户可见的关卡或篇目代码，例如“CW-ST-4”；不要填写内部剧情 ID'),
-            source_types: { type: 'array', items: { type: 'string' },
-              description: '限定资料类型：原文 vector_original/vector_scene；实体与图谱 entity_profile/entity_attachment/graph_entity/graph_relation/graph_event/entity_attribute；结构化档案 csv_archive/csv_activity/csv_record；知识资料 vector_wiki/travel_notes/timeline；classic_hit 为经典检索命中' },
-            speakers: stringList('结构化说话人展示名，只匹配亲口台词候选'),
-          },
+        search_intent: {
+          type: 'string', enum: ['single_sentence_search'],
+          description: '只检索官方剧情单句向量表，并执行原有 LLM 验证；其他问题使用默认主站路线',
         },
-        limits: {
-          type: 'object', additionalProperties: false,
-          description: '批量规模控制',
-          properties: {
-            per_channel: { type: 'object', description: '各渠道最多保留候选数，键使用 graph/csv/vector/fallback_raw/wiki/timeline' },
-            candidate_limit: { type: 'integer', description: '批量合并去重前后的全局候选上限' },
-            final_limit: { type: 'integer', description: 'Cleaner 最终交给回答上下文的来源上限' },
-            context_chars: { type: 'integer', description: '最终 answer_context 字符上限；调试召回时不要无故放大' },
-          },
-        },
-        thresholds: {
-          type: 'object', additionalProperties: false,
-          description: '分数阈值（只用于裁剪候选，不代表事实可信度）',
-          properties: {
-            per_channel: { type: 'object', description: '各渠道最低分，键使用实际渠道名；不同渠道分数不可横向比较' },
-            minimum_score: { type: 'number', description: '全局最低检索分数' },
-          },
-        },
-        validation: { type: 'string', enum: ['default', 'none', 'record_only', 'llm'],
-          description: '云端候选审核：default=产品默认；none=跳过 LLM 审核；record_only=记录审核但不淘汰；llm=显式启用审核' },
-        search_intent: { type: 'string', enum: ['quote_search', 'scene_search', 'single_sentence_search'],
-          description: 'single_sentence_search=只记得一句官方剧情原文的大意、字词可能记错时定位单句；quote_search=跨资料批量找亲口台词、名词或近似引文，通常配 speakers；scene_search=按大概情节、事件过程或人物互动描述模糊召回原文场景' },
-        preprocess: { type: 'boolean', description: '查询预处理开关，默认 true；只有预处理明显误改查询时才设 false' },
-        link_entities: { type: 'boolean', description: '自动规范化实体，默认开启；关闭后 graph、timeline 与实体资料召回可能明显减少' },
-        attach_entity_profiles: { type: 'boolean', description: '是否把命中实体的资料卡并入候选；只找原文且资料卡造成噪声时可关闭' },
-        run_cleaner: { type: 'boolean', description: '是否执行云端候选清洗、去重和最终上下文组装；正常回答保持开启，只有诊断原始召回时才关闭' },
-        append_fallback_original: { type: 'boolean', description: '是否追加兜底原文检索；主渠道不含 vector 且仍需原文线索时使用' },
-        append_wiki: { type: 'boolean', description: '是否追加自建 Wiki 语义检索' },
-        append_timeline: { type: 'boolean', description: '是否追加活动时间线；查询需能链接到明确活动实体' },
       },
-    },
-  },
-}
-
-// The answering model selects only between the two product routes. Advanced
-// filters and candidate budgets remain a server/diagnostic contract, but are
-// intentionally not model-facing because applying them before the shared
-// Cleaner changes the main site's proven retrieval semantics.
-CLOUD_SEARCH_PARAMETERS.properties.depth.description =
-  '兼容字段；不会改变云端主站的检索路由。回答深度由 Agent 自己的运行模式控制，通常省略'
-CLOUD_SEARCH_PARAMETERS.properties.evidence_policy.description =
-  'mixed=完整复用 PRTS.chat 主站检索、审核与 Cleaner；original_only=只运行官方剧情原文向量路线'
-CLOUD_SEARCH_PARAMETERS.properties.options = {
-  type: 'object', additionalProperties: false,
-  description: '通常省略。只有用户记得一句原文大意且措辞可能不准时，选择官方剧情单句向量路线',
-  properties: {
-    search_intent: {
-      type: 'string', enum: ['single_sentence_search'],
-      description: '只检索官方剧情单句向量表，并执行原有 LLM 验证；其他问题使用默认主站路线',
     },
   },
 }
@@ -418,7 +371,7 @@ async function modelReadToContract(args = {}, store) {
     throw Object.assign(new Error('section 只能与 mode=section 一起使用'), { code: 'INVALID_REQUEST' })
   }
   const selection = mode === 'document'
-    ? { mode, cursor: null }
+    ? { mode, cursor: null, ...(args.line !== undefined ? { start_line: args.line } : {}) }
     : mode === 'section'
           ? { mode, section }
         : { mode: 'around', center_line: args.line,
@@ -508,7 +461,6 @@ export async function apply(ctx, config = {}) {
   // DSH 自身不会以同一 callId 重试工具执行；此缓存只防御第三方 tools/execute
   // 策略在同一 exec 内的重放，避免重复扫描语料。完整跨重启幂等仍由未来共享
   // 调用存储承担，避免把检索正文写入配置目录。
-  const completedSearchCalls = new Map()
 
   const stopWatching = await shared.watchConfig(ctx.logger)
   ctx.effect(() => stopWatching, 'prts-corpus: config watch')
@@ -516,64 +468,10 @@ export async function apply(ctx, config = {}) {
     store.cacheShards = effective.cacheShards
   }), 'prts-corpus: store config')
 
-  // Host 常驻实例拥有 PRTS preset 的资料准入；preset 自身直到准入通过才会挂载。
-  if (config.registerUi !== false) {
-    ctx.inject(['agentPresets'], (presetCtx) => {
-      let preparing = null
-      let preparationError = null
-      const notify = () => { presetCtx.agentPresets.notifyAvailability('prts') }
-      const installed = async () => {
-        try {
-          const pointer = JSON.parse(await readFile(join(releasesDir, 'current.json'), 'utf8'))
-          const releaseId = String(pointer.release_id || '')
-          if (!releaseId) return false
-          const manifest = JSON.parse(await readFile(
-            join(releasesDir, releaseId, 'release-manifest.json'), 'utf8'))
-          return manifest.release_id === releaseId && /^[0-9a-f]{64}$/.test(String(manifest.data_version || ''))
-        } catch {
-          return false
-        }
-      }
-      const availability = async () => {
-        if (shared.download.active) return {
-          status: 'preparing', reason: '资料正在下载。可在“设置 → 插件 → PRTS 语料”查看进度。',
-        }
-        if (preparing) return { status: 'preparing', reason: '资料已安装，正在准备本地索引和实体别名。' }
-        if (isEntityRecognitionReady(store)) return undefined
-        if (preparationError) return {
-          status: 'blocked',
-          reason: `资料准备失败：${preparationError}。请前往“设置 → 插件 → PRTS 语料”检查或重新下载。`,
-        }
-        if (!await installed()) return {
-          status: 'blocked',
-          reason: process.env.PRTS_PORTABLE === '1'
-            ? '发行版语料缺失或配置无效。请确认 ZIP 已完整解压；也可前往“设置 → 插件 → PRTS 语料 → 版本管理”重新下载。'
-            : '尚未安装资料或资料目录配置无效。请前往“设置 → 插件 → PRTS 语料 → 版本管理”下载并检查配置。',
-        }
-        if (!preparing) {
-          preparing = store.ready()
-            .then(() => prepareEntityRecognition(store))
-            .catch((error) => { preparationError = error?.message ?? String(error) })
-            .finally(() => {
-              preparing = null
-              notify()
-            })
-        }
-        return { status: 'preparing', reason: '资料已安装，正在准备本地索引和实体别名。' }
-      }
-      presetCtx.agentPresets.registerAvailability('prts', availability)
-      presetCtx.effect(() => shared.subscribeRuntime(() => {
-        preparationError = null
-        if (!shared.download.active) store.reset()
-        notify()
-      }), 'prts-corpus: preset availability')
-    })
-  }
-
   const mountTools = (toolCtx) => {
     const tools = toolCtx.tools
     // Host 的 preset 准入已经完成初始化；工具挂载不再触发下载或全量扫描。
-    applyEntityRecognition(toolCtx, store)
+    applyEntityRecognition(toolCtx, store, shared)
     tools.register({
       name: 'corpus_search',
       description: SEARCH_DESCRIPTION,
@@ -582,7 +480,9 @@ export async function apply(ctx, config = {}) {
       timeoutMs: 120_000,
       isConcurrencySafe: () => true,
       execute: async (args, exec) => {
+        await requireLocalCorpus(store)
         const evidenceState = evidenceStates.forExecution(exec)
+        const completedSearchCalls = evidenceState.completedSearchCalls
         const callId = String(exec?.callId || '')
         // 先做对象校验再做幂等哈希：JSON.stringify(undefined) 返回 undefined，
         // 直接 update 会抛 TypeError，绕过本工具的 INVALID_REQUEST 错误通道。
@@ -611,12 +511,13 @@ export async function apply(ctx, config = {}) {
           }
           return structuredClone(cached.response)
         }
-        const response = await executeSearch(store, scopedArgs, { signal: exec?.signal,
+        let response = await executeSearch(store, scopedArgs, { signal: exec?.signal,
           requestId: callId || undefined })
         if (response?.error) {
           throw Object.assign(new Error(response.error.message),
             { code: response.error.code, retryable: response.error.retryable })
         }
+        response = await attachRetravelerRelations(store, response, scopedArgs, enabledGames)
         if (callId) {
           completedSearchCalls.set(callId, { requestHash, response: structuredClone(response) })
           if (completedSearchCalls.size > 256) completedSearchCalls.delete(completedSearchCalls.keys().next().value)
@@ -637,6 +538,7 @@ export async function apply(ctx, config = {}) {
       // 模型调用顺序独占执行并逐个提交结果。
       isConcurrencySafe: () => false,
       execute: async (args, exec) => {
+        await requireLocalCorpus(store)
         const evidenceState = evidenceStates.forExecution(exec)
         let contract
         try {
@@ -688,7 +590,10 @@ export async function apply(ctx, config = {}) {
       output: { schema: {}, render: renderTimeline },
       timeoutMs: 60_000,
       isConcurrencySafe: () => true,
-      execute: (args, exec) => executeTimelineSearch(store, args, { signal: exec?.signal }),
+      execute: async (args, exec) => {
+        await requireLocalCorpus(store)
+        return executeTimelineSearch(store, args, { signal: exec?.signal })
+      },
     })
 
     // 云端工具：按生效配置注册，配置变更（设置页）时 dispose + 热重建
@@ -731,8 +636,9 @@ export async function apply(ctx, config = {}) {
             const payload = { ...args, games, intent_id: evidenceState.cloudIntentId }
             const response = await cloud.search(payload, { signal: exec?.signal })
             const mapped = await attachLocalSourceMappings(store, response, { signal: exec?.signal })
-            rememberCloudMappings(evidenceState, mapped)
-            return mapped
+            const enriched = await attachRetravelerRelations(store, mapped, args, c.enabledGames)
+            rememberCloudMappings(evidenceState, enriched)
+            return enriched
           } catch (error) {
             return cloudErrorResponse(error)
           }

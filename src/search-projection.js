@@ -126,6 +126,10 @@ export function projectSearch(value, options = {}) {
     : ''
   const warnings = (value?.warnings || []).length
     ? `## 资料提示\n${value.warnings.map((item) => `- ${item.message || item}`).join('\n')}` : ''
-  return [heading, warnings, ...documents.map((document) => renderDocument(document, options)), zero, complete, next]
+  const relations = (value?.retraveler_relations || []).length
+    ? `## 再旅者对应关系（人工审校附属字段）\n${value.retraveler_relations.map((item) =>
+      `- 终末地角色：${item.endfield_name}；泰拉记忆原型：${item.terra_memory_prototype || '未登记'}；` +
+      `状态：${item.relation_status}。这是跨游戏关系，不是人物别名。`).join('\n')}` : ''
+  return [heading, warnings, relations, ...documents.map((document) => renderDocument(document, options)), zero, complete, next]
     .filter(Boolean).join('\n\n')
 }

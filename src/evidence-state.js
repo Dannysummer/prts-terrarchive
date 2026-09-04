@@ -18,6 +18,7 @@ function newState() {
     cloudSourceMappings: [],
     readCoverage: [],
     documents: new Map(),
+    completedSearchCalls: new Map(),
   }
 }
 
@@ -47,16 +48,19 @@ export function visibleToolResults(agent) {
 }
 
 export function createEvidenceStateRegistry() {
-  const agents = new WeakMap()
-  const fallback = newState()
+  const contexts = new WeakMap()
   return {
     forExecution(exec) {
       const agent = exec?.agent
-      if (!agent || (typeof agent !== 'object' && typeof agent !== 'function')) return fallback
-      let state = agents.get(agent)
+      const owner = agent && (typeof agent === 'object' || typeof agent === 'function')
+        ? agent
+        : exec && (typeof exec === 'object' || typeof exec === 'function') ? exec : null
+      // 没有可识别的宿主会话对象时宁可放弃跨调用复用，也不能让不同请求共享证据。
+      if (!owner) return newState()
+      let state = contexts.get(owner)
       if (!state) {
         state = newState()
-        agents.set(agent, state)
+        contexts.set(owner, state)
       }
       return state
     },
@@ -138,8 +142,11 @@ export async function resolveReadWindow(store, contract) {
     return { documentId, lineStart: ranges[0].start_line,
       lineEnd: boundedEnd(ranges[0].end_line) }
   }
-  if (selection.mode === 'document' && !selection.cursor) return { documentId, lineStart: 1,
-    lineEnd: boundedEnd(contract.limits?.max_lines || 100) }
+  if (selection.mode === 'document' && !selection.cursor) {
+    const start = Number(selection.start_line || 1)
+    return { documentId, lineStart: start,
+      lineEnd: boundedEnd(start + Number(contract.limits?.max_lines || 100) - 1) }
+  }
   return null
 }
 

@@ -19,7 +19,8 @@ import { readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises
 import { randomBytes } from 'node:crypto'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureCorpusRelease, RELEASE_ID_PATTERN, resolveModelScopeCurrentRelease } from './installer.js'
+import { ensureCorpusRelease, missingEnabledGamePacks, RELEASE_ID_PATTERN,
+  resolveModelScopeCurrentRelease, validateLocalRelease } from './installer.js'
 import { redactConfig } from './state.js'
 import { executeRead } from './read.js'
 
@@ -420,11 +421,13 @@ export function buildApi(shared, env = {}) {
       try {
         const pointer = JSON.parse(await readFile(join(shared.releasesDir, 'current.json'), 'utf8'))
         const releaseId = String(pointer.release_id || '')
-        const manifest = JSON.parse(await readFile(
-          join(shared.releasesDir, releaseId, 'release-manifest.json'), 'utf8'))
-        installed = Boolean(releaseId && manifest.release_id === releaseId
-          && /^[0-9a-f]{64}$/u.test(String(manifest.data_version || '')))
-        if (!installed) installationIssue = 'current.json 或 release-manifest.json 内容无效'
+        const manifest = await validateLocalRelease(shared.releasesDir, releaseId)
+        const missingGames = missingEnabledGamePacks(manifest, config.enabledGames)
+        installed = Boolean((!pointer.data_version || pointer.data_version === manifest.data_version)
+          && missingGames.length === 0)
+        if (missingGames.length) installationIssue = `当前版本缺少已启用模块：${missingGames.map((game) =>
+          game === 'endfield' ? '终末地' : '明日方舟').join('、')}`
+        else if (!installed) installationIssue = 'current.json 或 release-manifest.json 内容无效'
       } catch (error) {
         installationIssue = error?.code === 'ENOENT'
           ? '未找到本地语料；请下载资料或检查资料目录配置'
@@ -433,7 +436,7 @@ export function buildApi(shared, env = {}) {
       let storeInfo = { loaded: ready, installed, installationIssue,
         releaseId: null, dataVersion: null, documentCount: null, packCount: null }
       if (store && ready && store.releaseId) {
-        storeInfo = { ...storeInfo, loaded: true, installed: true, installationIssue: null,
+        storeInfo = { ...storeInfo, loaded: true,
           releaseId: store.releaseId, dataVersion: store.dataVersion,
           documentCount: store.documents.size, packCount: store.packs.size }
       }
@@ -459,10 +462,11 @@ export function buildApi(shared, env = {}) {
     if (method === 'POST' && route === 'activate') {
       const releaseId = String(body?.releaseId ?? '')
       if (!RELEASE_ID_PATTERN.test(releaseId)) throw new ApiError(400, 'releaseId 非法')
-      const dir = join(shared.releasesDir, releaseId)
-      const manifest = JSON.parse(await readFile(join(dir, 'release-manifest.json'), 'utf8'))
-      if (manifest.release_id !== releaseId || !/^[0-9a-f]{64}$/.test(String(manifest.data_version ?? ''))) {
-        throw new ApiError(400, '版本清单与 releaseId/data_version 不匹配')
+      let manifest
+      try {
+        manifest = await validateLocalRelease(shared.releasesDir, releaseId, { verifyHashes: true })
+      } catch (error) {
+        throw new ApiError(400, `版本不完整，无法激活：${error?.message ?? error}`)
       }
       const pointerTemp = join(shared.releasesDir, `current.json.${randomBytes(6).toString('hex')}.tmp`)
       await writeFile(pointerTemp, JSON.stringify({

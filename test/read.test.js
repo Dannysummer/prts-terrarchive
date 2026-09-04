@@ -6,11 +6,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { existsSync } from 'node:fs'
 import { CorpusStore } from '../src/store.js'
 import { executeRead, renderRead, normalizeReadRequest } from '../src/read.js'
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)))
 const releasesDir = resolve(packageDir, 'data', 'releases')
+const corpusTest = existsSync(resolve(releasesDir, 'current.json')) ? test : test.skip
 
 const AMIYA_DOC = 'character:char_002_amiya:archives' // 119 行，official_game 包首文档
 const AMIYA_REF = 'official_game:character:char_002_amiya:archives:L1'
@@ -86,7 +88,7 @@ test('normalizeReadRequest 接受联合协议的终末地稳定 source_ref', () 
   assert.equal(profile.refLine, 5)
 })
 
-test('store：初始化并建立文档索引', async () => {
+corpusTest('store：初始化并建立文档索引', async () => {
   const store = new CorpusStore({ releasesDir })
   await store.ready()
   assert.equal(store.releaseId, 'agent-corpus-v1-20260826-timeline-v1')
@@ -96,7 +98,7 @@ test('store：初始化并建立文档索引', async () => {
   assert.equal(store.getDocumentIdByPrefix('official_game:character:char_002_amiya:archives'), AMIYA_DOC)
 })
 
-test('corpus_read：display_title 定位（title+line 表面）', async () => {
+corpusTest('corpus_read：display_title 定位（title+line 表面）', async () => {
   const store = new CorpusStore({ releasesDir })
   const response = await executeRead(store, {
     intent_id: 'title-1',
@@ -124,7 +126,7 @@ test('corpus_read：display_title 定位（title+line 表面）', async () => {
   assert.equal(noCenter.error.code, 'LINE_RANGE_INVALID')
 })
 
-test('corpus_read：实体资料与角色 Wiki 都使用类型化自然标题', async () => {
+corpusTest('corpus_read：实体资料与角色 Wiki 都使用类型化自然标题', async () => {
   const store = new CorpusStore({ releasesDir })
   const wikiByTitle = await executeRead(store, {
     intent_id: 'wiki-natural-title', locator: { display_title: '凯尔希 / 角色 Wiki' },
@@ -162,7 +164,7 @@ test('corpus_read：实体资料与角色 Wiki 都使用类型化自然标题', 
   assert.doesNotThrow(() => JSON.parse(JSON.stringify(response)))
 })
 
-test('corpus_read：section 模式只读取 Wiki 标签内部正文', async () => {
+corpusTest('corpus_read：section 模式只读取 Wiki 标签内部正文', async () => {
   const store = new CorpusStore({ releasesDir })
   await store.ready()
   let wiki = null
@@ -194,7 +196,7 @@ test('corpus_read：section 模式只读取 Wiki 标签内部正文', async () =
   assert.equal(invalid.error.code, 'INVALID_REQUEST')
 })
 
-test('corpus_read：故事原文不自动夹带剧情总结与活动时间线', async () => {
+corpusTest('corpus_read：故事原文不自动夹带剧情总结与活动时间线', async () => {
   const store = new CorpusStore({ releasesDir })
   const response = await executeRead(store, {
     intent_id: 'attach-1',
@@ -222,7 +224,7 @@ test('corpus_read：故事原文不自动夹带剧情总结与活动时间线', 
   assert.equal(memory.story_context, undefined)
 })
 
-test('corpus_read：source_ref + around（以引用行为中心）', async () => {
+corpusTest('corpus_read：source_ref + around（以引用行为中心）', async () => {
   const store = new CorpusStore({ releasesDir })
   const response = await executeRead(store, {
     intent_id: 'intent-1',
@@ -245,7 +247,7 @@ test('corpus_read：source_ref + around（以引用行为中心）', async () =>
   assert.equal(response.document.document_id, AMIYA_DOC)
 })
 
-test('corpus_read：document_id + range + plain_text + 截断', async () => {
+corpusTest('corpus_read：document_id + range + plain_text + 截断', async () => {
   const store = new CorpusStore({ releasesDir })
   const response = await executeRead(store, {
     intent_id: 'intent-2',
@@ -264,7 +266,7 @@ test('corpus_read：document_id + range + plain_text + 截断', async () => {
   assert.ok(response.content.text.length <= 200 + response.selection.line_count)
 })
 
-test('corpus_read：document 模式游标分页', async () => {
+corpusTest('corpus_read：document 模式游标分页', async () => {
   const store = new CorpusStore({ releasesDir })
   const runtime = makeRuntime()
   const page1 = await executeRead(store, {
@@ -287,9 +289,20 @@ test('corpus_read：document 模式游标分页', async () => {
   assert.equal(page2.status, 'ok')
   assert.equal(page2.selection.line_start, 11)
   assert.equal(page2.selection.line_end, 20)
+
+  const naturalPage2 = await executeRead(store, {
+    intent_id: 'intent-3',
+    locator: { document_id: AMIYA_DOC },
+    selection: { mode: 'document', start_line: 11 },
+    limits: { max_lines: 10 },
+  }, runtime)
+  assert.equal(naturalPage2.status, 'ok')
+  assert.equal(naturalPage2.selection.mode, 'document')
+  assert.equal(naturalPage2.selection.line_start, 11)
+  assert.equal(naturalPage2.selection.line_end, 20)
 })
 
-test('corpus_read：错误码（文档/行号/游标/版本）', async () => {
+corpusTest('corpus_read：错误码（文档/行号/游标/版本）', async () => {
   const store = new CorpusStore({ releasesDir })
   const runtime = makeRuntime()
 
@@ -320,7 +333,7 @@ test('corpus_read：错误码（文档/行号/游标/版本）', async () => {
 
 })
 
-test('renderRead：模型可见文本', async () => {
+corpusTest('renderRead：模型可见文本', async () => {
   const store = new CorpusStore({ releasesDir })
   const response = await executeRead(store, {
     intent_id: 'render-1',
@@ -352,7 +365,7 @@ test('renderRead：模型可见文本', async () => {
   assert.ok(errorBlocks[0].text.includes('code=DOCUMENT_NOT_FOUND'))
 })
 
-test('corpus_read：activity 模式按活动通读全部剧情原文', async () => {
+corpusTest('corpus_read：activity 模式按活动通读全部剧情原文', async () => {
   const store = new CorpusStore({ releasesDir })
   const page1 = await executeRead(store, {
     intent_id: 'activity-1',

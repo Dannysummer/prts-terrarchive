@@ -52,12 +52,15 @@ const PRESET_COMPOSITION = [
   `  config:`,
   `    registerTools: true`,
   `    registerUi: false`,
+  `    enabledGames:`,
+  `      - arknights`,
+  `      - endfield`,
   `    # releasesDir 缺省 $DSH_HOME/prts-corpus/releases；资料放在别处可显式指定绝对路径`,
   `    # （Windows 亦可用正斜杠）。`,
   `    # 默认启用匿名云端组合语义检索；可在设置 → 插件 → PRTS 语料中关闭。`,
   `    cloud:`,
   `      baseUrl: https://prts.chat`,
-  `      game: arknights`,
+  `      game: all`,
   `- id: tool-web`,
   `  name: '@deepseek-ai/dsh-tool-web'`,
   `  config:`,
@@ -69,6 +72,10 @@ const PRESET_COMPOSITION = [
   `  name: '@deepseek-ai/dsh-tool-skill'`,
   `- id: prts-retrieval-skill`,
   `  name: prts-terrarchive/skill`,
+  `  config:`,
+  `    enabledGames:`,
+  `      - arknights`,
+  `      - endfield`,
   ``,
 ].join('\n')
 
@@ -122,6 +129,44 @@ function enableSafeWebFetch(composition) {
   return lines.join('\n')
 }
 
+/** 为安装器生成的双游戏云端 preset 显式固定本地资料范围。 */
+function enableDualGameModules(composition) {
+  const lines = composition.split('\n')
+  const start = lines.findIndex((line) => /^- id: prts-corpus\s*$/.test(line))
+  if (start < 0) return composition
+  let end = lines.findIndex((line, index) => index > start && /^- id:\s+/u.test(line))
+  if (end < 0) end = lines.length
+  const block = lines.slice(start, end)
+  if (block.some((line) => /^\s{4}enabledGames:\s*$/u.test(line))) return composition
+  const usesDefaultDualCloud = block.some((line) => /^\s{6}baseUrl:\s*https:\/\/prts\.chat\s*$/u.test(line))
+    && block.some((line) => /^\s{6}game:\s*all\s*$/u.test(line))
+  if (!usesDefaultDualCloud) return composition
+  const registerUi = lines.findIndex((line, index) => index > start && index < end
+    && /^\s{4}registerUi:\s*/u.test(line))
+  const registerTools = lines.findIndex((line, index) => index > start && index < end
+    && /^\s{4}registerTools:\s*/u.test(line))
+  const insertAfter = registerUi >= 0 ? registerUi : registerTools
+  if (insertAfter < 0) return composition
+  lines.splice(insertAfter + 1, 0, '    enabledGames:', '      - arknights', '      - endfield')
+  return lines.join('\n')
+}
+
+/** 让独立 Skill entry 与安装器生成的双模块工具 entry 使用同一基础范围。 */
+function enableDualSkillModules(composition) {
+  const lines = composition.split('\n')
+  const start = lines.findIndex((line) => /^- id: prts-retrieval-skill\s*$/u.test(line))
+  if (start < 0) return composition
+  let end = lines.findIndex((line, index) => index > start && /^- id:\s+/u.test(line))
+  if (end < 0) end = lines.length
+  if (lines.slice(start, end).some((line) => /^\s{4}enabledGames:\s*$/u.test(line))) return composition
+  const nameIndex = lines.findIndex((line, index) => index > start && index < end
+    && /^\s{2}name:\s*prts-terrarchive\/skill\s*$/u.test(line))
+  if (nameIndex < 0) return composition
+  lines.splice(nameIndex + 1, 0, '  config:', '    enabledGames:',
+    '      - arknights', '      - endfield')
+  return lines.join('\n')
+}
+
 console.log(`prts-terrarchive 一键安装 → profile「${profile}」`)
 
 if (!presetOnly) {
@@ -154,6 +199,14 @@ if (!existsSync(compositionPath)) {
     /- id: prts-corpus-guidance\r?\n\s+name: prts-terrarchive\/guidance/g,
     '- id: prts-retrieval-skill\n  name: prts-terrarchive/skill',
   )
+  // 0.1.0-alpha.1 的官方预设曾把基础层锁死为 arknights，使新版
+  // enabledGames 在无用户层配置时无法默认双游戏。只迁移本安装器生成的
+  // 标准 baseUrl + game 片段；自定义云端地址和其他 preset 不受影响。
+  migrated = migrated.replace(
+    /(\s{4}cloud:\r?\n\s{6}baseUrl:\s*https:\/\/prts\.chat\r?\n\s{6}game:\s*)arknights\b/u,
+    '$1all',
+  )
+  migrated = enableDualGameModules(migrated)
   migrated = enableSafeWebFetch(migrated)
   // Web 搜索 provider 留在 DSH Web host；preset 只需挂载稳定的模型工具。
   if (!/^- id: tool-web\s*$/m.test(migrated)) {
@@ -175,6 +228,7 @@ if (!existsSync(compositionPath)) {
       ? migrated.replace(skillAnchor, `${toolSkill}- id: prts-retrieval-skill`)
       : `${migrated.trimEnd()}\n${toolSkill}`
   }
+  migrated = enableDualSkillModules(migrated)
   if (migrated !== existing) writeFileSync(compositionPath, migrated)
 }
 if (!existsSync(metadataPath)) writeFileSync(metadataPath, PRESET_METADATA)

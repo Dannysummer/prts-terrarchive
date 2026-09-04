@@ -292,8 +292,9 @@ test('断点续传：已就绪分片跳过（只重新拉清单）', async () =>
       releasesDir: dir, releaseId: RELEASE_ID, fetchImpl, order: ['site'],
     })
     assert.equal(second.status, 'downloaded')
-    assert.equal(second.files, 0, '分片已校验存在，无需重下')
-    assert.ok(counters.site <= before + 3, '只重新拉了清单（release-manifest + 2 个 pack-manifest）')
+    assert.equal(second.files, 2, '已校验分片无需重下，但无独立哈希的两个 pack 清单必须刷新')
+    assert.ok(counters.site <= before + 5,
+      '只重新拉 release/pack 清单及其两个文件，不重新下载分片')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -317,7 +318,16 @@ test('requireRelease：手动指定版本不被其他当前版本短路', async 
   const dir = await mkdtemp(join(tmpdir(), 'prts-inst-required-'))
   try {
     const other = 'other-rel'
-    await mkdir(join(dir, other), { recursive: true })
+    const shard = buildShard('client:references:other', `client_data:references:${'f'.repeat(24)}`,
+      '其他版本', '另一个已经完整安装的版本')
+    await mkdir(join(dir, other, 'references', 'shards'), { recursive: true })
+    await writeFile(join(dir, other, 'references', 'shards', '00000.jsonl.gz'), shard)
+    await writeFile(join(dir, other, 'references', 'pack-manifest.json'), JSON.stringify({
+      pack_id: 'references', data_version: 'f'.repeat(64), document_count: 1,
+      compressed_size: shard.length,
+      shards: [{ path: 'shards/00000.jsonl.gz', sha256: sha256(shard), compressed_size: shard.length }],
+      search_index: { shards: [] },
+    }))
     await writeFile(join(dir, other, 'release-manifest.json'), JSON.stringify({
       release_id: other, data_version: 'f'.repeat(64),
       document_count: 1, required_packs: ['references'],

@@ -7,8 +7,11 @@
  */
 import { randomUUID } from 'node:crypto'
 import { buildAliasGroups } from './timeline.js'
+import { loadEntityRelationCatalog } from './entity-routing.js'
 
 const preparedRecognizers = new WeakMap()
+
+const GAME_LABELS = Object.freeze({ arknights: '明日方舟', endfield: '终末地' })
 
 function cancelledError() {
   return Object.assign(new Error('实体预识别已取消'), { code: 'CANCELLED' })
@@ -56,7 +59,7 @@ export class EntityAliasAutomaton {
           node = this.nodes[node].next.get(character)
         }
         this.nodes[node].outputs.push({ canonical, alias: String(rawAlias).trim(),
-          length: [...alias].length })
+          games: [...new Set(group.games || [])], length: [...alias].length })
       }
     }
     const queue = []
@@ -85,7 +88,8 @@ export class EntityAliasAutomaton {
         const start = index - output.length + 1
         // 单字别名在普通句子中误报率过高；仅当整个输入就是该字时保留。
         if (output.length === 1 && characters.length > 1) continue
-        found.push({ canonical: output.canonical, alias: output.alias, start, end: index + 1 })
+        found.push({ canonical: output.canonical, alias: output.alias, games: output.games,
+          start, end: index + 1 })
       }
     }
     found.sort((left, right) => left.start - right.start
@@ -93,7 +97,10 @@ export class EntityAliasAutomaton {
       || left.canonical.localeCompare(right.canonical, 'zh-CN'))
     const selected = []
     for (const match of found) {
-      if (selected.some((item) => match.start >= item.start && match.end <= item.end)) continue
+      if (selected.some((item) => match.start >= item.start && match.end <= item.end
+        && !(match.start === item.start && match.end === item.end))) continue
+      if (selected.some((item) => match.start === item.start && match.end === item.end
+        && match.canonical === item.canonical)) continue
       selected.push(match)
     }
     return selected
@@ -140,18 +147,7 @@ export function createEntityRecognizer(store) {
       if (signal?.aborted) throw cancelledError()
       const matches = automaton.match(text)
       if (signal?.aborted) throw cancelledError()
-      let cachedCatalog = store._endfieldRelationCatalog
-      if (cachedCatalog?.dataVersion !== store.dataVersion) {
-        let value
-        try {
-          const loaded = await store.getDocumentByPath?.('config/retravelers.json')
-          const record = loaded?.record || loaded
-          value = JSON.parse((record?.lines || []).map((line) => line.text).join('\n') || '{}')
-        } catch { value = {} }
-        cachedCatalog = { dataVersion: store.dataVersion, value }
-        store._endfieldRelationCatalog = cachedCatalog
-      }
-      const catalog = cachedCatalog.value
+      const catalog = await loadEntityRelationCatalog(store)
       const normalizedText = normalized(text)
       const relationHints = []
       for (const row of catalog.retravelers || []) {
@@ -174,36 +170,71 @@ export function createEntityRecognizer(store) {
   }
 }
 
-function userText(messages) {
-  return (messages || []).filter((message) => message?.source?.kind === 'user')
-    .flatMap((message) => message.content || [])
+function latestUserInput(messages) {
+  const list = messages || []
+  let index = -1
+  for (let cursor = list.length - 1; cursor >= 0; cursor -= 1) {
+    if (list[cursor]?.source?.kind === 'user') { index = cursor; break }
+  }
+  const message = index >= 0 ? list[index] : null
+  const text = (message?.content || [])
     .filter((block) => block?.type === 'text')
     .map((block) => String(block.text || '')).filter(Boolean).join('\n')
+  return { index, message, text }
 }
 
-function recognitionMessage(result) {
+function recognitionMessage(result, enabledGames, { corpusReady = true } = {}) {
   const aliases = new Map()
   for (const match of result.matches) {
-    const values = aliases.get(match.canonical) || new Set()
-    values.add(match.alias)
-    aliases.set(match.canonical, values)
+    const value = aliases.get(match.canonical) || { aliases: new Set(), games: new Set() }
+    value.aliases.add(match.alias)
+    for (const game of match.games || []) value.games.add(game)
+    aliases.set(match.canonical, value)
   }
-  const lines = [...aliases].map(([canonical, values]) =>
-    `- ${canonical}（问题中命中：${[...values].join('、')}）`)
+  for (const hint of result.relation_hints || []) {
+    if (hint.endfield_name) {
+      const value = aliases.get(hint.endfield_name) || { aliases: new Set(), games: new Set() }
+      value.aliases.add(hint.endfield_name)
+      value.games.add('endfield')
+      aliases.set(hint.endfield_name, value)
+    }
+    const arknightsName = hint.terra_memory_prototype || hint.arknights_name
+    if (arknightsName) {
+      const value = aliases.get(arknightsName) || { aliases: new Set(), games: new Set() }
+      value.aliases.add(arknightsName)
+      value.games.add('arknights')
+      aliases.set(arknightsName, value)
+    }
+  }
+  const lines = [...aliases].map(([canonical, value]) => {
+    const ownership = [...value.games].map((game) => GAME_LABELS[game]).filter(Boolean)
+    return `- ${canonical} — ${ownership.length ? ownership.join(' + ') : '归属未确定'}` +
+      `（问题中命中：${[...value.aliases].join('、')}）`
+  })
+  const enabled = enabledGames.map((game) => GAME_LABELS[game]).filter(Boolean)
+  const mentionedGames = new Set([...aliases.values()].flatMap((value) => [...value.games]))
+  const disabledMentioned = [...mentionedGames].filter((game) => !enabledGames.includes(game))
+  const crossGame = mentionedGames.has('arknights') && mentionedGames.has('endfield')
   const message = {
     id: randomUUID(), role: 'user',
-    source: { kind: 'plugin', plugin: 'prts-terrarchive', form: 'notice', summary: '实体别名预识别' },
+    source: { kind: 'plugin', plugin: 'prts-terrarchive', form: 'notice', summary: 'PRTS 检索上下文' },
     content: [{ type: 'text', text: [
-      '<prts:recognized-entities>',
-      '本地别名图鉴从用户问题中识别到以下规范实体。这仅用于名称消歧；是否作为检索条件由你决定。',
-      ...lines,
+      '<prts:retrieval-context>',
+      `当前启用资料库：${enabled.join('、') || '无'}。`,
+      `本地资料与实体索引：${corpusReady ? '已就绪' : '不可用'}。`,
+      ...(lines.length ? ['用户问题中识别到的规范实体与游戏归属：', ...lines] : []),
+      ...(crossGame ? ['路由判定：这是跨游戏问题；如两库均启用，使用 games=["arknights","endfield"] 联合检索。'] : []),
+      ...(disabledMentioned.length ? [
+        `注意：问题涉及但当前未启用的资料库：${disabledMentioned.map((game) => GAME_LABELS[game]).join('、')}。`,
+      ] : []),
       ...(result.relation_hints?.length ? [
         '人工审校关系提示（用于展开检索，不是官方原文）：',
         ...result.relation_hints.map((hint) => hint.kind === 'retraveler_memory_prototype'
           ? `- ${hint.endfield_name}：再旅者；泰拉记忆原型=${hint.terra_memory_prototype || '未登记'}。检索词：${hint.query_terms.join('、')}。两者不是别名。`
           : `- ${hint.endfield_name} / ${hint.arknights_name}：仅登记外观相似；现有剧情没有关系证据，不得推断为再旅者或记忆原型。`),
       ] : []),
-      '</prts:recognized-entities>',
+      '资料边界：零命中不等于不存在。网页工具只处理问题中确实需要的现实历史、词源、公告或时效信息，不得静默替代游戏原文证据。',
+      '</prts:retrieval-context>',
     ].join('\n') }],
   }
   Object.freeze(message.content[0])
@@ -213,25 +244,33 @@ function recognitionMessage(result) {
 }
 
 /** 在首次模型请求前把用户问题的实体预识别结果附加为短上下文。 */
-export function applyEntityRecognition(ctx, store) {
+export function applyEntityRecognition(ctx, store, shared = null) {
   if (typeof ctx.on !== 'function') return false
   const recognizer = createEntityRecognizer(store)
   ctx.on('agent/pre-step', async ({ messages, signal }, next) => {
-    const text = userText(messages)
-    // Preset admission prepares the corpus before the agent exists. A missing
-    // store here must never turn the first model request into an initializer.
-    if (!text || signal?.aborted || !store.loaded) return next()
-    let result
-    try {
-      result = await recognizer.detect(text, { signal })
-    } catch (error) {
-      if (signal?.aborted || error?.code === 'CANCELLED') return next()
-      ctx.logger?.warn?.(`prts-corpus: 实体预识别失败，已跳过: ${error?.message ?? error}`)
-      return next()
+    const input = latestUserInput(messages)
+    const text = input.text
+    if (!text || signal?.aborted) return next()
+    // 同一用户轮次可能经历多次 tool step。上下文只在该轮第一次模型请求前
+    // 附加，避免每次工具返回后重复堆叠相同实体提示。
+    const alreadyInjected = input.index >= 0 && (messages || []).slice(input.index + 1)
+      .some((message) => message?.source?.plugin === 'prts-terrarchive'
+        && message?.source?.summary === 'PRTS 检索上下文')
+    if (alreadyInjected) return next()
+    let result = { matches: [], entities: [], relation_hints: [] }
+    if (store.loaded) {
+      try {
+        result = await recognizer.detect(text, { signal })
+      } catch (error) {
+        if (signal?.aborted || error?.code === 'CANCELLED') return next()
+        ctx.logger?.warn?.(`prts-corpus: 实体预识别失败，已跳过: ${error?.message ?? error}`)
+      }
     }
     const downstream = await next()
-    if ((!result.entities.length && !result.relation_hints?.length) || downstream.kind !== 'enter') return downstream
-    return { ...downstream, messages: [...downstream.messages, recognitionMessage(result)] }
+    if (downstream.kind !== 'enter') return downstream
+    const enabledGames = shared?.effective?.().enabledGames || ['arknights', 'endfield']
+    return { ...downstream, messages: [...downstream.messages,
+      recognitionMessage(result, enabledGames, { corpusReady: store.loaded })] }
   })
   return true
 }

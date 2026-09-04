@@ -4,16 +4,18 @@ import { createHmac } from 'node:crypto'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { CorpusStore, documentUid } from '../src/store.js'
 import { executeSearch } from '../src/search.js'
 import { collectSourceHints, resolveCloudSources, attachLocalSourceMappings } from '../src/source-map.js'
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)))
+const corpusTest = existsSync(resolve(packageDir, 'data/releases/current.json')) ? test : test.skip
 const stateDir = await mkdtemp(resolve(tmpdir(), 'prts-source-map-state-'))
 after(() => rm(stateDir, { recursive: true, force: true }))
 
-test('每篇资料有稳定 document_uid，云端来源可映射到本地标题和官方行号', async () => {
+corpusTest('每篇资料有稳定 document_uid，云端来源可映射到本地标题和官方行号', async () => {
   const store = new CorpusStore({ releasesDir: resolve(packageDir, 'data/releases'),
     cursorSecretPath: resolve(stateDir, 'cursor-secret.bin') })
   const search = await executeSearch(store, { query: '重生', resource_types: ['story'] })
@@ -80,7 +82,7 @@ test('每篇资料有稳定 document_uid，云端来源可映射到本地标题�
   visit(attached)
 })
 
-test('主项目短文件名与同关卡多篇剧情可确定性映射', async () => {
+corpusTest('主项目短文件名与同关卡多篇剧情可确定性映射', async () => {
   const store = new CorpusStore({ releasesDir: resolve(packageDir, 'data/releases'),
     cursorSecretPath: resolve(stateDir, 'cursor-secret.bin') })
   await store.ready()

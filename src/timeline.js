@@ -7,6 +7,7 @@
  * source_marker（年表出处:tle_xxx）可反查单条事件的完整来源。
  */
 import { randomBytes } from 'node:crypto'
+import { loadEntityRelationCatalog, relationEndfieldNames } from './entity-routing.js'
 
 export const TIMELINE_CONTRACT_VERSION = 'prts-corpus-tools-v1'
 const MARKER_PATTERN = /^年表出处:(tle_[0-9a-f]{24})$/
@@ -146,18 +147,23 @@ class TimelineFault extends Error {
  * 构建全量别名组。组来源：
  *  1. entities 包每条实体记录的 canonical_name + aliases（权威源）；
  *  2. references/char_alias.txt 的分号分隔行（挂到同名 canonical 组，找不到则自建）。
- * @returns {Promise<Array<{canonical: string, aliases: string[]}>>}
+ * @returns {Promise<Array<{canonical: string, aliases: string[], games: string[]}>>}
  */
 export async function buildAliasGroups(store) {
   const groups = new Map()
-  const remember = (canonicalValue, aliasValues = []) => {
+  const crossGameNames = relationEndfieldNames(await loadEntityRelationCatalog(store))
+  const remember = (canonicalValue, aliasValues = [], gameValue = '') => {
     const canonical = String(canonicalValue ?? '').trim()
     if (!canonical) return
-    const group = groups.get(canonical) || { canonical, aliases: new Set([canonical]) }
+    const group = groups.get(canonical) || { canonical, aliases: new Set([canonical]), games: new Set() }
     for (const value of aliasValues) {
       const alias = String(value ?? '').trim()
-      if (alias) group.aliases.add(alias)
+      // 旧 PRTS 数据曾把终末地再旅者名塞进泰拉人物 aliases 方便联搜。
+      // 关系现在由独立附属字段承载；跨游戏名不再改变实体身份。
+      if (alias && (alias === canonical || !crossGameNames.has(alias))) group.aliases.add(alias)
     }
+    const game = String(gameValue || '').trim().toLocaleLowerCase()
+    if (game === 'arknights' || game === 'endfield') group.games.add(game)
     groups.set(canonical, group)
   }
 
@@ -165,7 +171,11 @@ export async function buildAliasGroups(store) {
     predicate: (document) => document.document_type === 'entity',
   })) {
     const entity = record.entity || {}
-    remember(entity.canonical_name || record.document.display_title, entity.aliases || record.aliases)
+    const identity = `${record.document.document_id || ''} ${record.document.source_ref_prefix || ''}`
+      .toLocaleLowerCase()
+    const game = record.document.game || (identity.includes('endfield:') ? 'endfield' : 'arknights')
+    remember(entity.canonical_name || record.document.display_title,
+      entity.aliases || record.aliases, game)
   }
 
   const aliasReference = await store.getDocumentByPath('char_alias.txt')
@@ -177,7 +187,8 @@ export async function buildAliasGroups(store) {
     remember(existing?.canonical || aliases[0], aliases)
   }
 
-  return [...groups.values()].map((group) => ({ canonical: group.canonical, aliases: [...group.aliases] }))
+  return [...groups.values()].map((group) => ({ canonical: group.canonical,
+    aliases: [...group.aliases], games: [...group.games] }))
 }
 
 /**
@@ -190,7 +201,8 @@ export async function aliasesFor(store, entityNames) {
   if (!store._aliasGroups) store._aliasGroups = await buildAliasGroups(store)
   return entityNames.map((name) => {
     const group = store._aliasGroups.find((item) => item.aliases.includes(name))
-    return group ? { canonical: group.canonical, aliases: [...group.aliases] } : { canonical: name, aliases: [name] }
+    return group ? { canonical: group.canonical, aliases: [...group.aliases], games: [...group.games] }
+      : { canonical: name, aliases: [name], games: [] }
   })
 }
 

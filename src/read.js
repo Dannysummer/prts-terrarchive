@@ -218,7 +218,12 @@ export function normalizeReadRequest(raw) {
     if (endLine < startLine) throw new ContractError('LINE_RANGE_INVALID', 'end_line must be >= start_line')
     selection = { mode: 'range', start_line: startLine, end_line: endLine }
   } else if (mode === 'document') {
-    selection = { mode: 'document', cursor: selectionRaw.cursor ?? null }
+    const startLine = selectionRaw.start_line === undefined ? 1
+      : requireInt(selectionRaw.start_line, { min: 1, max: 1e9, field: 'start_line' })
+    if (selectionRaw.cursor != null && selectionRaw.start_line !== undefined) {
+      throw new ContractError('INVALID_REQUEST', 'document mode cannot combine cursor with start_line')
+    }
+    selection = { mode: 'document', cursor: selectionRaw.cursor ?? null, start_line: startLine }
   } else if (mode === 'section') {
     if (hasActivityId || hasActivityName) {
       throw new ContractError('INVALID_REQUEST', 'section mode requires a document locator')
@@ -411,7 +416,7 @@ export async function executeRead(store, rawArgs, runtime) {
       startLine = ranges[0].start_line
       endLine = ranges[0].end_line
     } else {
-      let nextLine = 1
+      let nextLine = selection.start_line
       if (selection.cursor !== null) {
         if (typeof selection.cursor !== 'string' || selection.cursor.length < 1 || selection.cursor.length > 4096) {
           throw new ContractError('CURSOR_INVALID', 'cursor must be a string of 1..4096 chars')
@@ -773,7 +778,7 @@ export function projectReadPublic(value) {
       returned_lines: Number(value.page?.returned_lines || value.primary.lines?.length || 0),
       has_more: hasMore,
       continuation: hasMore && Number.isInteger(nextLine) && nextLine > 0
-        ? { title: value.primary.title, line: nextLine, before: 0, after: 100 }
+        ? { title: value.primary.title, mode: 'document', line: nextLine }
         : null,
     } }
   }
@@ -797,7 +802,7 @@ export function projectReadPublic(value) {
     page: { returned_lines: Number(value.page?.returned || lines.length),
       has_more: Boolean(value.page?.has_more),
       continuation: value.page?.has_more
-        ? { title, line: Number(value.selection?.line_end) + 1, before: 0, after: 100 }
+        ? { title, mode: 'document', line: Number(value.selection?.line_end) + 1 }
         : null },
   }
 }
@@ -834,7 +839,7 @@ export function renderRead(_args, value) {
       const next = projected.page.continuation
       const title = String(next.title || '').replace(/"/gu, '\\"')
       parts.push(`继续阅读《${next.title}》，从第 ${next.line} 行开始。`)
-      parts.push(`调用：corpus_read({title:"${title}", line:${next.line}, before:0, after:100})`)
+      parts.push(`调用：corpus_read({title:"${title}", mode:"document", line:${next.line}})`)
     }
     return [{ type: 'text', text: parts.join('\n') }]
   }

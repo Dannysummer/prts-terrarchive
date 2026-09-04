@@ -8,7 +8,8 @@ import assert from 'node:assert/strict'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { CorpusStore } from '../src/store.js'
 import { executeRead } from '../src/read.js'
@@ -28,9 +29,11 @@ const LOCAL_CONFIG = Object.freeze({
   releasesDir: resolve(packageDir, 'data/releases'),
   download: { enabled: false },
   registerUi: false,
+  enabledGames: ['arknights'],
 })
+const corpusTest = existsSync(resolve(LOCAL_CONFIG.releasesDir, 'current.json')) ? test : test.skip
 
-function makeCtx({ agentPresets } = {}) {
+function makeCtx() {
   const registered = []
   const tools = {
     register: (definition) => {
@@ -45,7 +48,6 @@ function makeCtx({ agentPresets } = {}) {
   let rpcHandler = null
   const ctx = {
     tools,
-    ...(agentPresets ? { agentPresets } : {}),
     connection: { rpc: { handle: (_channel, handler) => { rpcHandler = handler; return () => {} } } },
     effect: (fn) => {
       const dispose = fn()
@@ -55,7 +57,6 @@ function makeCtx({ agentPresets } = {}) {
     inject: (dependencies, callback) => {
       if (dependencies.includes('tools')) callback(ctx)
       else if (dependencies.includes('connection')) callback(ctx)
-      else if (dependencies.includes('agentPresets') && agentPresets) callback(ctx)
     },
     logger: { warn: () => {}, info: () => {} },
   }
@@ -79,34 +80,22 @@ async function collectSearchDocuments(searchTool, request) {
   }
 }
 
-test('Host 在资料未安装时锁住 PRTS preset，并给出下载入口', async () => {
+test('未安装资料时仍可挂载 preset，本地工具统一提示用户前往设置安装', async () => {
   const plugin = await import('../src/index.js')
   const dir = await mkdtemp(resolve(tmpdir(), 'prts-preset-admission-'))
-  let provider = null
-  let notifications = 0
-  const agentPresets = {
-    registerAvailability(id, next) {
-      assert.equal(id, 'prts')
-      provider = next
-      return () => { provider = null }
-    },
-    notifyAvailability(id) {
-      assert.equal(id, 'prts')
-      notifications += 1
-    },
-  }
-  const fixture = makeCtx({ agentPresets })
+  const fixture = makeCtx()
   try {
     await plugin.apply(fixture.ctx, {
       releasesDir: resolve(dir, 'releases'),
-      registerUi: true,
+      registerUi: false,
       download: { enabled: false },
     })
-    assert.equal(typeof provider, 'function')
-    const availability = await provider()
-    assert.equal(availability.status, 'blocked')
-    assert.match(availability.reason, /设置.*插件.*PRTS 语料.*版本管理.*下载/)
-    assert.equal(notifications, 0)
+    assert.deepEqual(fixture.registered.map((item) => item.name),
+      ['corpus_search', 'corpus_read', 'timeline_search'])
+    for (const tool of fixture.registered) {
+      await assert.rejects(tool.execute({}, {}), (error) => error.code === 'CORPUS_NOT_INSTALLED'
+        && /本地数据包暂未安装.*提醒用户.*设置.*安装/.test(error.message))
+    }
   } finally {
     fixture.dispose()
     await rm(dir, { recursive: true, force: true })
@@ -231,9 +220,66 @@ test('PRTS 检索策略注册为按需 skill，不注入 system prompt', async (
   assert.equal(registered[0].source, 'bundled')
   assert.equal(registered[0].provider, 'prts-terrarchive')
   assert.equal(registered[0].resourceBase.kind, 'directory')
-  assert.match(registered[0].content, /一般先用 `cloud_search` 搜索一次/)
-  assert.match(registered[0].content, /若与原文冲突，以原文为准/)
-  assert.match(registered[0].content, /整理性 Wiki、时间线、实体资料和剧情总结可以直接支持普通事实与综合说明/)
+  assert.match(registered[0].description, /明日方舟：终末地/)
+  assert.match(registered[0].description, /跨游戏关系/)
+  assert.match(registered[0].content, /本次会话的资料范围/)
+  assert.match(registered[0].content, /按问题选择最短路线/)
+  assert.match(registered[0].content, /默认 `cloud_search` 发现候选/)
+  assert.match(registered[0].content, /零命中只表示当前查询未命中/)
+  assert.match(registered[0].content, /不得静默替代游戏资料证据/)
+  assert.match(registered[0].content, /当前模块：明日方舟/)
+  assert.match(registered[0].content, /当前模块：明日方舟：终末地/)
+  assert.match(registered[0].content, /当前模式：双模块联合检索/)
+  assert.match(registered[0].content, /当前工具契约/)
+  assert.match(registered[0].content, /# 推荐检索过程/)
+  assert.match(registered[0].content, /# 双模块检索配方/)
+  assert.doesNotMatch(registered[0].content, /# 明日方舟检索配方/)
+  assert.doesNotMatch(registered[0].content, /# 终末地检索配方/)
+  assert.match(registered[0].content, /可以直接支持.*这一有限结论/)
+  assert.match(registered[0].content, /无需强求游戏剧情重复证明该登记/)
+  assert.match(registered[0].content, /不要发送[\s\S]*`scene_search`/)
+})
+
+test('PRTS Skill catalog 保持双游戏可发现，正文标明当前启用范围', async () => {
+  const configPath = resolve(testDshHome, 'prts-corpus.json')
+  await writeFile(configPath, JSON.stringify({ enabledGames: ['endfield'] }))
+  try {
+    const skill = await import('../src/skill.js')
+    const registered = []
+    await skill.apply({ skills: { register(value) { registered.push(value); return () => {} } } })
+    assert.equal(registered.length, 1)
+    assert.match(registered[0].description, /明日方舟：终末地/)
+    assert.match(registered[0].description, /跨游戏关系/)
+    assert.match(registered[0].content, /会话创建时启用：\*\*明日方舟：终末地\*\*/)
+    assert.match(registered[0].content, /当前模块：明日方舟：终末地/)
+    assert.doesNotMatch(registered[0].content, /# 当前模块：明日方舟\n/)
+    assert.doesNotMatch(registered[0].content, /当前模式：双模块联合检索/)
+    assert.match(registered[0].content, /`original_story`/)
+    assert.match(registered[0].content, /# 推荐检索过程/)
+    assert.match(registered[0].content, /# 终末地检索配方/)
+    assert.doesNotMatch(registered[0].content, /# 明日方舟检索配方/)
+    assert.doesNotMatch(registered[0].content, /# 双模块检索配方/)
+    assert.doesNotMatch(registered[0].content, /retraveler_relations/)
+  } finally {
+    await rm(configPath, { force: true })
+  }
+})
+
+test('PRTS Skill 仅启用明日方舟时不装配终末地与双模块说明', async () => {
+  const skill = await import('../src/skill.js')
+  const registered = []
+  await skill.apply({ skills: { register(value) { registered.push(value); return () => {} } } },
+    { enabledGames: ['arknights'] })
+    assert.match(registered[0].content, /# 当前模块：明日方舟\n/)
+    assert.doesNotMatch(registered[0].content, /当前模块：明日方舟：终末地/)
+    assert.doesNotMatch(registered[0].content, /当前模式：双模块联合检索/)
+    assert.match(registered[0].content, /`operator_record`/)
+    assert.match(registered[0].content, /当前工具契约/)
+    assert.match(registered[0].content, /# 推荐检索过程/)
+    assert.match(registered[0].content, /# 明日方舟检索配方/)
+    assert.doesNotMatch(registered[0].content, /# 终末地检索配方/)
+    assert.doesNotMatch(registered[0].content, /# 双模块检索配方/)
+    assert.doesNotMatch(registered[0].content, /retraveler_relations/)
 })
 
 test.skip('legacy search/read 富响应兼容轨迹（v2 facade 已替换）', async () => {
@@ -451,7 +497,7 @@ test.skip('legacy search/read 富响应兼容轨迹（v2 facade 已替换）', a
   dispose()
 })
 
-test('v4 facade：可穷尽按文档搜索、完整 Wiki 字段、自然读取与标题锚点', async () => {
+corpusTest('v4 facade：可穷尽按文档搜索、完整 Wiki 字段、自然读取与标题锚点', async () => {
   const plugin = await import('../src/index.js')
   const { registered, ctx, dispose } = makeCtx()
   await plugin.apply(ctx, LOCAL_CONFIG)
@@ -546,7 +592,7 @@ test('v4 facade：可穷尽按文档搜索、完整 Wiki 字段、自然读取�
     assert.equal(firstPage.page.returned_lines, 2)
     assert.equal(firstPage.page.has_more, true)
     assert.deepEqual(firstPage.page.continuation, {
-      title: document.title, line: firstPage.primary.selection.line_end + 1, before: 0, after: 100,
+      title: document.title, mode: 'document', line: firstPage.primary.selection.line_end + 1,
     })
     assert.equal(firstPage.page.next_cursor, undefined,
       '模型可见的读取结果不应暴露内部 cursor')
@@ -556,7 +602,8 @@ test('v4 facade：可穷尽按文档搜索、完整 Wiki 字段、自然读取�
     const secondPage = await readTool.execute(firstPage.page.continuation,
       { agent: {}, callId: 'v2-read-page-2' })
     assert.equal(secondPage.primary.title, document.title)
-    assert.notEqual(secondPage.primary.lines[0].line, firstPage.primary.lines[0].line)
+    assert.equal(secondPage.primary.lines[0].line, firstPage.primary.selection.line_end + 1)
+    assert.equal(secondPage.primary.selection.mode, 'document')
 
     // 已经写入旧会话的签名 cursor 仍可恢复，并允许模型附带自然标题及改变预算。
     const legacyStore = new CorpusStore({ releasesDir: LOCAL_CONFIG.releasesDir })
@@ -574,7 +621,7 @@ test('v4 facade：可穷尽按文档搜索、完整 Wiki 字段、自然读取�
   } finally { dispose() }
 })
 
-test('v4 读取覆盖去重：完整复用、部分补读、压缩后重读与 Agent 隔离', async () => {
+corpusTest('v4 读取覆盖去重：完整复用、部分补读、压缩后重读与 Agent 隔离', async () => {
   const plugin = await import('../src/index.js')
   const { registered, ctx, dispose } = makeCtx()
   await plugin.apply(ctx, LOCAL_CONFIG)
@@ -637,11 +684,12 @@ test('v4 读取覆盖去重：完整复用、部分补读、压缩后重读与 A
 
     // 6) 相同 DSH callId 幂等；换参数不得复用旧调用绑定
     const idempotentArgs = { query: '重生', resource_types: ['story'] }
-    const firstCall = await searchTool.execute(idempotentArgs, { callId: 'search-idempotent' })
-    const repeatedCall = await searchTool.execute(idempotentArgs, { callId: 'search-idempotent' })
+    const idempotentExec = { callId: 'search-idempotent' }
+    const firstCall = await searchTool.execute(idempotentArgs, idempotentExec)
+    const repeatedCall = await searchTool.execute(idempotentArgs, idempotentExec)
     assert.deepEqual(repeatedCall, firstCall)
     const rebound = await searchTool.execute({ ...idempotentArgs, query: '凯尔希' },
-      { callId: 'search-idempotent' })
+      idempotentExec)
     assert.equal(rebound.error?.code, 'INVALID_REQUEST')
   } finally { dispose() }
 })

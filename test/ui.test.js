@@ -89,15 +89,15 @@ test('state：三层配置（默认 ← patch ← 用户文件）与写校验', 
 async function makeRelease(releasesDir, releaseId, dataVersion, lineText) {
   const lines = [{ line_number: 1, line_type: 'narration', speaker_raw: '', text: lineText ?? `正文-${releaseId}` }]
   const record = {
-    document: { document_id: `client:references:${releaseId}`, source_ref_prefix: `client_data:references:${'0'.repeat(24)}`,
+    document: { document_id: `client:official_game:${releaseId}`, source_ref_prefix: `client_data:official_game:${'0'.repeat(24)}`,
       display_title: `文档-${releaseId}`, document_type: 'reference', document_kind: 'reference', line_count: 1 },
     lines, speakers: [], local_integrity: { algorithm: 'sha256:joined-lines-v1', sha256: computeLinesIntegrity(lines) },
   }
   const shard = gzipSync(Buffer.from(`${JSON.stringify(record)}\n`))
-  const dir = join(releasesDir, releaseId, 'references')
+  const dir = join(releasesDir, releaseId, 'official_game')
   await mkdir(join(dir, 'shards'), { recursive: true })
   await writeFile(join(dir, 'pack-manifest.json'), JSON.stringify({
-    pack_id: 'references', game: 'arknights', data_version: dataVersion,
+    pack_id: 'official_game', game: 'arknights', data_version: dataVersion,
     document_count: 1, compressed_size: shard.length,
     shards: [{ path: 'shards/00000.jsonl.gz', sha256: sha256(shard), compressed_size: shard.length }],
     search_index: { shards: [] },
@@ -105,10 +105,39 @@ async function makeRelease(releasesDir, releaseId, dataVersion, lineText) {
   await writeFile(join(dir, 'shards', '00000.jsonl.gz'), shard)
   await writeFile(join(releasesDir, releaseId, 'release-manifest.json'), JSON.stringify({
     release_id: releaseId, data_version: dataVersion, document_count: 1, created_at: `2026-01-0${releaseId.length}T00:00:00Z`,
-    packs: [{ pack_id: 'references', manifest_path: 'references/pack-manifest.json',
+    required_packs: ['official_game'],
+    packs: [{ pack_id: 'official_game', manifest_path: 'official_game/pack-manifest.json',
       document_count: 1, compressed_size: shard.length, data_version: dataVersion }],
   }))
 }
+
+test('ui API：不允许激活哈希损坏的 release', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prts-ui-invalid-'))
+  try {
+    const releasesDir = join(dir, 'releases')
+    await mkdir(releasesDir, { recursive: true })
+    await makeRelease(releasesDir, 'rel-good', 'a'.repeat(64))
+    await makeRelease(releasesDir, 'rel-bad', 'b'.repeat(64))
+    await writeFile(join(releasesDir, 'current.json'), JSON.stringify({
+      release_id: 'rel-good', data_version: 'a'.repeat(64),
+    }))
+    const shardPath = join(releasesDir, 'rel-bad', 'official_game', 'shards', '00000.jsonl.gz')
+    const corrupted = Buffer.from(await readFile(shardPath))
+    corrupted[0] ^= 0xff
+    await writeFile(shardPath, corrupted)
+    const shared = createSharedState({ configPath: join(dir, 'config.json'), releasesDir,
+      patchConfig: { enabledGames: ['arknights'] } })
+    await shared.loadConfig()
+    const api = buildApi(shared, { logger: { info: () => {}, warn: () => {} } })
+    const result = await api.call('POST', '/api/prts-corpus/activate', { releaseId: 'rel-bad' })
+    assert.equal(result.status, 400)
+    assert.match(result.json.error, /SHA-256/)
+    const current = JSON.parse(await readFile(join(releasesDir, 'current.json'), 'utf8'))
+    assert.equal(current.release_id, 'rel-good')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
 
 test('ui API：releases / activate / delete / config / status', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'prts-ui-'))
@@ -118,7 +147,8 @@ test('ui API：releases / activate / delete / config / status', async () => {
     await makeRelease(releasesDir, 'rel-a', 'a'.repeat(64))
     await makeRelease(releasesDir, 'rel-b', 'b'.repeat(64))
     await writeFile(join(releasesDir, 'current.json'), JSON.stringify({ release_id: 'rel-a', data_version: 'a'.repeat(64) }))
-    const shared = createSharedState({ configPath: join(dir, 'config.json'), releasesDir, patchConfig: {} })
+    const shared = createSharedState({ configPath: join(dir, 'config.json'), releasesDir,
+      patchConfig: { enabledGames: ['arknights'] } })
     await shared.loadConfig()
     const api = buildApi(shared, { logger: { info: () => {}, warn: () => {} } })
 
@@ -363,7 +393,7 @@ test('ui API：read 拉全文（超限值被夹到契约范围，证据卡点开
 
     // 客户端传入超限的 max_lines/max_chars → 路由应夹到契约允许的最值，而不是让 executeRead 报错。
     const clamped = await api.call('POST', '/api/prts-corpus/read', {
-      locator: { document_id: 'client:references:rel-a' },
+      locator: { document_id: 'client:official_game:rel-a' },
       selection: { mode: 'document' },
       max_lines: 2000, max_chars: 200000,
     })
@@ -378,7 +408,7 @@ test('ui API：read 拉全文（超限值被夹到契约范围，证据卡点开
 
     // 契约次小值：max_lines 最少 1、max_chars 最少 100 也被正确保留。
     const minOk = await api.call('POST', '/api/prts-corpus/read', {
-      locator: { document_id: 'client:references:rel-a' },
+      locator: { document_id: 'client:official_game:rel-a' },
       selection: { mode: 'document' },
       max_lines: 1, max_chars: 100,
     })
@@ -410,7 +440,7 @@ test('ui API read：首行超过 max_chars 报 BUDGET_EXCEEDED；activity 定位
     // 首行即超过 max_chars：显式报 BUDGET_EXCEEDED，而不是返回
     // “0 行 ok + 原地 next_cursor”导致分页死循环。
     const budget = await api.call('POST', '/api/prts-corpus/read', {
-      locator: { document_id: 'client:references:rel-long' },
+      locator: { document_id: 'client:official_game:rel-long' },
       selection: { mode: 'document' },
       max_lines: 10, max_chars: 100,
     })
@@ -420,7 +450,7 @@ test('ui API read：首行超过 max_chars 报 BUDGET_EXCEEDED；activity 定位
 
     // 放宽预算后同一文档正常读取。
     const okRead = await api.call('POST', '/api/prts-corpus/read', {
-      locator: { document_id: 'client:references:rel-long' },
+      locator: { document_id: 'client:official_game:rel-long' },
       selection: { mode: 'document' },
       max_lines: 10, max_chars: 1000,
     })

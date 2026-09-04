@@ -21,6 +21,11 @@ test('安装器为新旧 PRTS preset 幂等挂载网页工具和 tool-skill', as
     await writeFile(compositionPath, [
       '- id: prts-corpus',
       '  name: prts-terrarchive',
+      '  config:',
+      '    registerTools: true',
+      '    cloud:',
+      '      baseUrl: https://prts.chat',
+      '      game: arknights',
       '- id: tool-web',
       "  name: '@deepseek-ai/dsh-tool-web'",
       '  config:',
@@ -43,6 +48,11 @@ test('安装器为新旧 PRTS preset 幂等挂载网页工具和 tool-skill', as
     assert.match(composition, /- id: tool-web\n  name: '@deepseek-ai\/dsh-tool-web'\n  config:\n    fetch: true\n    searchTimeoutMs: 30000/)
     assert.match(composition, /- id: tool-skill\n  name: '@deepseek-ai\/dsh-tool-skill'/)
     assert.match(composition, /- id: prts-retrieval-skill\n  name: prts-terrarchive\/skill/)
+    assert.match(composition, /baseUrl: https:\/\/prts\.chat\n      game: all/)
+    assert.match(composition, /enabledGames:\n      - arknights\n      - endfield/)
+    assert.match(composition,
+      /- id: prts-retrieval-skill\n  name: prts-terrarchive\/skill\n  config:\n    enabledGames:\n      - arknights\n      - endfield/)
+    assert.doesNotMatch(composition, /game: arknights/)
     assert.ok(composition.indexOf('- id: tool-web') < composition.indexOf('- id: tool-skill'))
     assert.ok(composition.indexOf('- id: tool-skill') < composition.indexOf('- id: prts-retrieval-skill'))
     assert.equal(composition.match(/^- id: tool-web$/gm)?.length, 1)
@@ -76,6 +86,10 @@ test('--preset-only 不调用 dsh，仍生成可用预设', async () => {
     assert.match(composition, /- id: prts-corpus/)
     assert.match(composition, /- id: tool-web/)
     assert.match(composition, /fetch: true/)
+    assert.match(composition, /game: all/)
+    assert.match(composition, /enabledGames:\n      - arknights\n      - endfield/)
+    assert.match(composition,
+      /name: prts-terrarchive\/skill\n  config:\n    enabledGames:\n      - arknights\n      - endfield/)
   } finally {
     await rm(dshHome, { recursive: true, force: true })
   }

@@ -1,38 +1,38 @@
-# 组合检索配方
+# 明日方舟检索配方
 
-默认先以完整自然语言问题调用一次 `cloud_search`，再用以下配方收窄或核验。用户已经给出准确定位，或问题明确对应一个完整 Wiki 字段时，可以直接使用相应本地配方。
+以下流程只在明日方舟模块启用时使用，并始终带 `games:["arknights"]`。
 
 ## 角色参加过哪些活动
 
-1. `corpus_search(resource_types=["character_wiki"], character_names=[角色], wiki_sections=["相关活动"])`。
-2. 使用返回的完整字段，按原有顺序列出活动和角色作用；不要仅根据活动名再次全文搜索角色名来重建清单。
-3. 用户要求确认某项参与时，再用 `story/operator_record + activity_names + entity_names` 定位原文；简单逐字事实可直接引用搜索窗口，复杂场景再扩大上下文。
+1. `corpus_search({games:["arknights"], resource_types:["character_wiki"], character_names:[角色], wiki_sections:["相关活动"]})`。
+2. 使用完整字段按原顺序整理活动和作用，不用全文搜角色名重新拼清单。
+3. 用户要求确认某次实际参与时，再用 `story/operator_record + activity_names + entity_names` 定位；需要精确动作或台词时读取上下文。
 
 ## 某角色在某活动中的作用
 
-1. 可先读角色页 `相关活动`，确认该活动属于其经历。
-2. 查询 `story_wiki + activity_names=[活动] + wiki_sections=["角色剧情概括"] + query=角色`。
-3. 若需要更多过程，查询 `character_activity_wiki + character_names=[角色] + activity_names=[活动] + wiki_sections=["相关剧情总结"]`。
-4. 若需要具体行动、台词或人物归属，使用原文核验。
+1. 查 `story_wiki + activity_names + wiki_sections:["角色剧情概括"] + query:角色`。
+2. 需要更细过程时，查 `character_activity_wiki + character_names + activity_names + wiki_sections:["相关剧情总结"]`。
+3. 需要具体行动、说话人或因果时，以活动和角色为范围搜索 `story/operator_record`，再读取命中上下文。
 
 ## 某活动的整体研究
 
-1. 先使用云端结果建立事件与人物骨架；需要活动级完整整理时，读取 `story_wiki + activity_names + wiki_sections=["剧情总结"]`。
-2. 读取 `关键人物` 建立人物集合；针对目标人物读取 `角色剧情概括`。
-3. 用 `timeline_search(activity_names=[活动])` 排列相对或绝对时间。
-4. 对关键结论回到活动原文；不要求逐字证据时不必机械通读全部正文。
+1. 默认 `cloud_search` 建立事件和人物骨架；若只需现成概括，直接读 `story_wiki` 的 `剧情总结`。
+2. 读 `关键人物` 建立人物集合，按需读取目标人物的 `角色剧情概括`。
+3. 用 `timeline_search(activity_names:[活动])` 补时间位置。
+4. 只对会影响结论的关键事件回到官方原文，不机械通读全部篇章。
 
 ## 人物关系
 
-1. 使用默认云端检索取得关系和事件骨架。
-2. 如果实体预识别给出“再旅者—泰拉记忆原型”提示，首轮查询同时带双方姓名、`再旅者`、`记忆原型`；两个人仍是独立实体，不能互当别名或互相替换过滤条件。若提示标记为“仅外观相似、无剧情关系证据”，不得推断为再旅者或记忆原型。
-3. 分别读取双方规范角色页的 `相关角色`，检查是否双向出现、叙述是否一致。
-4. 关系起因、变化或冲突需要 `scene_search`，再用本地原文核验。
+1. 默认 `cloud_search` 搜索双方、关系和关键事件。
+2. 分别读取双方 `character_wiki` 的 `相关角色`，检查是否双向出现及叙述是否一致。
+3. 对关系起因、变化、冲突或态度，按云端映射或活动线索读取 `story/operator_record` 原文。
+
+## 台词与说话人
+
+1. 确切短句：`corpus_search({games:["arknights"], query:短句, resource_types:["story","operator_record"]})`。
+2. 查询某人亲口说的话时加 `speakers:[角色]`；查询谈及某人时才用 `entity_names`。
+3. 只记得大意时走 `single_sentence_search`，随后以返回标题和行号读取上下文。
 
 ## 人物综合资料
 
-- 身份概览：`简要介绍`。
-- 生平与阶段：`详细介绍`。
-- 高光场面：`剧情高光`，随后按出处回原文。
-- 能力评价：`战斗表现 + character_profile + character_module`。
-- 趣闻：`trivia`；回答时标明是整理性资料。
+先用角色 Wiki 的 `简要介绍/详细介绍/相关活动` 建立骨架；身份和身体资料查 `character_profile`，补充经历查 `character_module/operator_record`，原话与称呼查 `character_voice/story`。只核验实际用于回答的结论。

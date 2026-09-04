@@ -40,6 +40,12 @@ reads a known public URL for close verification. DSH's anonymous HTTP provider
 validates DNS answers, pins connections to public addresses, allows only
 same-origin redirects, and enforces response and timeout limits.
 
+The generated preset enables both `arknights` and `endfield`. The effective
+module list is stored as `enabledGames` in `$DSH_HOME/prts-corpus.json`; use a
+single item for a single-game setup and start a new session after changing it
+so the matching Skill module is assembled. A dual-module session is admitted
+only when the active local release contains both official game packs.
+
 For development from a source checkout:
 
 ```bash

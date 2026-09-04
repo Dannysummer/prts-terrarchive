@@ -100,7 +100,12 @@ export function projectCloudSearch(value) {
   const anchorLines = projectedAnchorPoints(mappings).map((anchor) =>
     `- [${anchor.game === 'endfield' ? '终末地' : '明日方舟'}] 《${anchor.title || '原文'}》${anchor.lines ? `第 ${anchor.lines} 行` : ''}`
       + `${anchor.document_uid ? `（同名消歧：${anchor.document_uid}）` : ''}`)
-  return [answerContext.trim(), anchorLines.length ? `## 可读取原文\n${anchorLines.join('\n')}` : '',
+  const relationLines = (value?.retraveler_relations || []).map((item) =>
+    `- 终末地角色：${item.endfield_name}；泰拉记忆原型：${item.terra_memory_prototype || '未登记'}；` +
+      `状态：${item.relation_status}。这是跨游戏关系，不是人物别名。`)
+  return [answerContext.trim(), relationLines.length
+    ? `## 再旅者对应关系（人工审校附属字段）\n${relationLines.join('\n')}` : '',
+  anchorLines.length ? `## 可读取原文\n${anchorLines.join('\n')}` : '',
     data.errors?.length ? `## 警告\n${data.errors.map((item) => item.message || item).join('\n')}` : '']
     .filter(Boolean).join('\n\n')
 }

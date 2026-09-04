@@ -1,16 +1,13 @@
-# 云端工具
+# 云端工具补充
 
-## cloud_search
+## `cloud_search`
 
-- 一般把它作为第一轮分析入口：使用完整自然语言问题取得事件、实体、资料与可读原文位置，再决定是否需要本地精确核验。
-- `query` 写成语义完整、可独立理解的自然语言，不使用关键词堆。
-- 模糊的一句原文用 `single_sentence_search`；一段情节、事件过程或人物互动显式用 `scene_search`；准确词句、正式资料标题、篇章和行号改用本地工具。
-- 默认 `evidence_policy=mixed` 完整复用 PRTS.chat 主站的意图路由、召回、审核、Cleaner 和上下文预算；不要自行设置渠道、过滤器、阈值或候选预算。
-- `evidence_policy=original_only` 明确切换到仅官方剧情原文的向量检索路线，不附加实体资料、Wiki 或时间线，适合用于模糊搜索场景以及用户提问的单句原文。
-- cloud_search 返回末尾的「## 可读取原文」列出已映射到本地篇章的标题与行号，可直接据此读取原文。用户没有要求原文且整理性证据足够、无冲突时，不必机械追读。
+默认路线适合情节、关系、动机和综合研究。`query` 应是主体、事件和所求关系完整的自然语言问题；准确原句、标题和行号优先本地字面检索。
 
-## cloud_inspect
+模型当前只能选择默认主站路线，或在只记得一句官方剧情原文大意时设置 `options.search_intent="single_sentence_search"`。不要使用服务端内部的 channels、filters、预算、阈值，也不要发送 `quote_search` 或 `scene_search`。
 
-- 默认检查最近一次云端检索，运行时会注入 `request_id`。
-- `selected_sources` 与 `answer_context` 用于定点读取回答材料；`candidates` 用于检查候选状态；`events` 与 `trace_steps` 只在诊断时使用。
-- 按 `next_cursor` 继续分页，避免重叠读取；`content_mode=none` 只取结构，`preview` 取受限正文，`full` 取当前页完整正文。
+`evidence_policy="mixed"` 使用主站混合检索；`original_only` 只运行官方剧情原文向量路线。两者都不改变“最终结论应按来源层级表述”的要求。结果中的可读取标题与行号可直接交给 `corpus_read`。
+
+## `cloud_inspect`
+
+只在截断、来源不清或召回异常时检查。优先查看 `selected_sources`、`answer_context`、`candidates`；`events` 和 `trace_steps` 用于诊断。通常由运行时关联最近请求，分页时原样复制整数 `next_cursor`。
