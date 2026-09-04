@@ -305,13 +305,15 @@ body[data-prts-skin="endfield-aic"] [data-slot="shell.overlay"] {
 .aic-chat-resize-line {
    position: fixed;
    z-index: 80;
-   top: 0;
-   bottom: 0;
+   top: 0; bottom: 0;
    width: 1px;
-   background: rgba(250, 255, 63, .78);
+   background: rgba(250, 255, 63, .9);
    box-shadow: 0 0 8px rgba(250, 255, 63, .24);
    pointer-events: none
 }
+/* 拖动中禁用把手钮与线的过渡，确保实时跟随不滞后 */
+body.aic-chat-resizing .aic-chat-resize-top { transition: none }
+body.aic-chat-resizing .aic-chat-resize-line { transition: none }
 
 .aic-band-backdrop {
    position: absolute;
@@ -1720,3 +1722,7 @@ body[data-prts-skin="endfield-aic"] .aic-chat-resize-top:active {
    color: var(--acid, #faff3f)
 }
 
+/* 拖动中按压钮：禁过渡实时跟随（置于钮声明之后以覆盖其 transition） */
+body.aic-chat-resizing body[data-prts-skin='endfield-aic'] .aic-chat-resize-top,
+body.aic-chat-resizing .aic-chat-resize-top { transition: none !important }
+body.aic-chat-resizing .aic-chat-resize-line { transition: none !important }
