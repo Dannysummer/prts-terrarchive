@@ -80,8 +80,8 @@ npx --yes prts-terrarchive@next desktop
 
 1. **重启** `dsh web`；
 2. **设置 → 插件 →「PRTS 语料」**：选择皮肤（Harness 默认 / PRTS Agent / Endfield AIC）；Endfield AIC 的模型与贴图已随插件包安装，切换皮肤不会触发额外下载；
-3. **版本管理**：下载双游戏资料（约 330 MiB，优先 ModelScope 镜像）。资料未安装或本地
-   索引、实体别名自动机仍在准备时，模式下拉会保留但锁住 PRTS，并显示恢复路径；
+3. **版本管理**：下载双游戏资料（约 330 MiB，优先 ModelScope 镜像）。未安装资料时
+   PRTS 模式仍可进入；调用本地工具会提醒前往本设置页安装；
 4. **新建会话，顶部模式下拉选「PRTS 模式」**；
 5. 直接用自然语言提问，或让模型调用下列工具。
 
