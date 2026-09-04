@@ -472,7 +472,10 @@ test('ui API read：首行超过 max_chars 报 BUDGET_EXCEEDED；activity 定位
 })
 
 test('client bundle：ModuleLoader 工厂产出插件并注册皮肤设置与 PRTS 界面席位', async () => {
-  const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const clientSource = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const cssSource = ['../lib/skin/prts-agent.css', '../lib/skin/endfield-aic.css']
+    .map((name) => readFileSync(new URL(name, import.meta.url), 'utf8')).join('\n')
+  const source = clientSource + '\n' + cssSource
   assert.match(source, /\[data-phase\]:not\(#prts-agent-scene\)/,
     '运行态必须读取 Conversation，不能读回场景自身')
   assert.match(source, /--agent-content-center/,
@@ -515,7 +518,7 @@ test('client bundle：ModuleLoader 工厂产出插件并注册皮肤设置与 PR
     '会话状态的 screen-reader 文本必须保持视觉隐藏')
   let entry = null
   const window = { __ModuleLoader__: { load: (value) => { entry = value } } }
-  vm.runInNewContext(source, { window, console })
+  vm.runInNewContext(clientSource, { window, console })
 
   assert.equal(entry.id, 'prts-terrarchive')
   const reactStub = {
@@ -608,10 +611,11 @@ test('client bundle：ModuleLoader 工厂产出插件并注册皮肤设置与 PR
 
 test('AIC skin：同步雪松林地图并规避 macOS 设置弹窗的 WebGL 合成卡顿', async () => {
   const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const skinCss = await readFile(new URL('../lib/skin/endfield-aic.css', import.meta.url), 'utf8')
   assert.match(client, /new MutationObserver\(syncMapActivity\)/)
   assert.match(client, /!document\.querySelector\('\[aria-modal="true"\]\[role="dialog"\]'\)/)
-  assert.match(client, /\[role="presentation"\]>\[aria-hidden="true"\].*backdrop-filter:none!important/s)
-  assert.match(client, /overflow:visible!important;pointer-events:none/)
+  assert.match(skinCss, /\[role="presentation"\]>\[aria-hidden="true"\].*backdrop-filter:none!important/s)
+  assert.match(skinCss, /overflow:visible!important;pointer-events:none/)
   assert.match(client, /aic-chat-resize/)
 
   const mapBundle = brotliDecompressSync(await readFile(

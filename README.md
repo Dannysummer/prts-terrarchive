@@ -282,6 +282,7 @@ src/
 lib/
   client.js              Web 客户端 bundle（皮肤、设置 UI 席位）
   endfield-map/          终末地皮肤地图资源（brotli/gzip 预压缩）
+  skin/                  皮肤样式（独立 .css，运行时按 /prts-corpus/skin 加载）
 bin/
   install.js             一键安装器
   pack-map-assets.mjs    地图资源压缩打包脚本

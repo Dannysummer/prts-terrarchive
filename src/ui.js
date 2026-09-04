@@ -31,6 +31,38 @@ const ENDFIELD_MAP_MIME = Object.freeze({
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
 })
+const SKIN_CSS_ROOT = resolve(fileURLToPath(new URL('../lib/skin/', import.meta.url)))
+const SKIN_CSS_FILES = new Set(['prts-agent.css', 'endfield-aic.css'])
+
+/**
+ * 静态回传皮肤样式（lib/skin/*.css，运行时由浏览器 fetch 注入 <style>）。
+ * 白名单文件名，拒绝其它路径；纯文本直出，不做预压缩。
+ */
+async function serveSkinCssAsset(req, res) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405); res.end(); return
+  }
+  let name
+  try {
+    name = decodeURIComponent(new URL(req.url ?? '/', 'http://dsh.invalid').pathname)
+      .replace(/^\/prts-corpus\/skin\/?/, '')
+  } catch {
+    res.writeHead(400); res.end(); return
+  }
+  if (!SKIN_CSS_FILES.has(name)) { res.writeHead(404); res.end(); return }
+  try {
+    const body = await readFile(join(SKIN_CSS_ROOT, name))
+    res.writeHead(200, {
+      'content-type': 'text/css; charset=utf-8',
+      'cache-control': 'no-cache',
+    })
+    res.end(req.method === 'HEAD' ? undefined : body)
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+    res.writeHead(404); res.end()
+  }
+}
+
 
 /**
  * 静态回传地图资源。文本类（.js/.json）在包内以 .br/.gz 预压缩副本存放
@@ -579,7 +611,11 @@ export function applyUi(ctx, shared) {
         kind: 'prefix', path: '/webmap3d/resources',
         handler: (req, res) => serveEndfieldMapAsset(req, res, '/webmap3d'),
       })
-      return () => { disposeResources(); disposeBundle(); disposeSkin() }
+      const disposeSkinCss = webServer.register({
+        kind: 'prefix', path: '/prts-corpus/skin',
+        handler: (req, res) => serveSkinCssAsset(req, res),
+      })
+      return () => { disposeResources(); disposeBundle(); disposeSkinCss(); disposeSkin() }
     }, 'prts-corpus: Endfield map assets')
   }
   ctx.logger?.info?.('prts-corpus: authenticated settings RPC mounted on /prts-corpus')
