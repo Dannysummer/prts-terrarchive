@@ -1825,8 +1825,8 @@ body[data-prts-skin='endfield-aic'] [data-composer-card]:focus-within {
 body[data-prts-skin="endfield-aic"] [data-phase="hero"] [data-composer-card],
 body[data-prts-skin="endfield-aic"] [data-composer-card] {
   position: relative !important;
-  margin-bottom: -55px;
-  padding-bottom: 55px !important;   /* 底部给 dock 留位(高度)，dock 高会覆盖 */
+  margin-bottom: -50px;
+  padding-bottom: 45px !important;   /* 底部给 dock 留位(高度)，dock 高会覆盖 */
   border-bottom: none!important;
 }
 body[data-prts-skin="endfield-aic"] [data-slot="conversation.composer.dock"] {
@@ -1861,4 +1861,11 @@ body[data-prts-skin="endfield-aic"] [data-slot="conversation.composer.dock"] {
 }
 body[data-prts-skin="endfield-aic"] [data-slot="conversation.composer.bar"]>div {
   margin-bottom: 0 !important;
+}
+
+/* 打开设置/模态时隐藏拖宽手柄与黄线(避免盖在对话框上) */
+body[data-prts-skin="endfield-aic"]:has([aria-modal="true"]) .aic-chat-resize-top,
+body[data-prts-skin="endfield-aic"]:has([aria-modal="true"]) .aic-chat-resize-line,
+body[data-prts-skin="endfield-aic"]:has([aria-modal="true"]) .aic-chat-resize {
+   display: none !important;
 }
