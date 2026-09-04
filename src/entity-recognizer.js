@@ -258,13 +258,14 @@ export function applyEntityRecognition(ctx, store, shared = null) {
         && message?.source?.summary === 'PRTS 检索上下文')
     if (alreadyInjected) return next()
     let result = { matches: [], entities: [], relation_hints: [] }
-    if (store.loaded) {
-      try {
-        result = await recognizer.detect(text, { signal })
-      } catch (error) {
-        if (signal?.aborted || error?.code === 'CANCELLED') return next()
-        ctx.logger?.warn?.(`prts-corpus: 实体预识别失败，已跳过: ${error?.message ?? error}`)
-      }
+    try {
+      // Store 是惰性加载的。不能用 loaded 作为“资料是否安装”的判断，否则
+      // 新会话第一次 pre-step 永远不会启动加载，并会把“尚未加载”误报为
+      // “不可用”。detect() 内部通过 ready() 完成单次共享初始化。
+      result = await recognizer.detect(text, { signal })
+    } catch (error) {
+      if (signal?.aborted || error?.code === 'CANCELLED') return next()
+      ctx.logger?.warn?.(`prts-corpus: 实体预识别失败，已跳过: ${error?.message ?? error}`)
     }
     const downstream = await next()
     if (downstream.kind !== 'enter') return downstream

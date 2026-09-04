@@ -130,17 +130,24 @@ test('agent/pre-step：再旅者关系注入双方游戏归属且不把原型当
   assert.match(notice, /两者不是别名/)
 })
 
-test('agent/pre-step：资料未加载时仅注入失败边界，不触发初始化', async () => {
+test('agent/pre-step：已安装但尚未加载时主动初始化并识别实体', async () => {
   let listener = null
   let iterated = false
+  let readyCalls = 0
   const ctx = {
     on(_name, callback) { listener = callback },
     logger: { warn() {} },
   }
   const store = {
     loaded: false,
-    async ready() { throw new Error('pre-step 不应调用 ready') },
-    async *iterateDocuments() { iterated = true },
+    dataVersion: null,
+    async ready() { readyCalls += 1; this.loaded = true; this.dataVersion = 'lazy-v1' },
+    async *iterateDocuments() {
+      iterated = true
+      yield { document: { document_type: 'entity', display_title: '凯尔希', game: 'arknights' },
+        entity: { canonical_name: '凯尔希', aliases: ['老猞猁'] } }
+    },
+    async getDocumentByPath() { return null },
   }
   applyEntityRecognition(ctx, store)
   const original = { id: 'u1', role: 'user', source: { kind: 'user' },
@@ -150,9 +157,26 @@ test('agent/pre-step：资料未加载时仅注入失败边界，不触发初始
   const decision = await listener({ messages: [original], signal: new AbortController().signal },
     async () => downstream)
   assert.equal(decision.messages.length, 2)
+  assert.match(decision.messages[1].content[0].text, /本地资料与实体索引：已就绪/)
+  assert.match(decision.messages[1].content[0].text, /凯尔希 — 明日方舟/)
+  assert.ok(readyCalls >= 1)
+  assert.equal(iterated, true)
+})
+
+test('agent/pre-step：资料确实未安装时注入失败边界', async () => {
+  let listener = null
+  const ctx = { on(_name, callback) { listener = callback }, logger: { warn() {} } }
+  const store = {
+    loaded: false, async ready() { throw new Error('current.json 不存在') },
+    async *iterateDocuments() {},
+  }
+  applyEntityRecognition(ctx, store)
+  const original = { id: 'u-missing', role: 'user', source: { kind: 'user' },
+    content: [{ type: 'text', text: '凯尔希是谁？' }] }
+  const decision = await listener({ messages: [original], signal: new AbortController().signal },
+    async () => ({ kind: 'enter', messages: [original] }))
   assert.match(decision.messages[1].content[0].text, /本地资料与实体索引：不可用/)
   assert.match(decision.messages[1].content[0].text, /不得静默替代游戏原文证据/)
-  assert.equal(iterated, false)
 })
 
 test('agent/pre-step：内置关系表在旧资料包中仍能识别提丰与提弗洛斯', async () => {
